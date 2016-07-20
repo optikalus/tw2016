@@ -1,0 +1,1497 @@
+var el = $('#tradewars')
+var lineHeight = 22
+var pageTimer, progressBarTimer
+var config, universe = []
+var retina = window.devicePixelRatio > 1;
+
+var sectorPrompt = '<br /><br /><span class="ansi-magenta-fg">Command [<span class="ansi-bright-yellow-fg">TL=00:00:00</span>]<span class="ansi-bright-yellow-fg">:</span>[<span class="ansi-bright-cyan-fg">#SECTORNUMBER</span>] (<span class="ansi-bright-yellow-fg">?=Help</span>)? : '
+var planetPrompt = '<br /><span class="ansi-magenta-fg">Planet command <span class="ansi-bright-yellow-fg">(?=help)</span> [D]</span>'
+var planetDestroyPrompt = '<span class="ansi-magenta-fg">Planetary Attack Command <span class="ansi-bright-yellow-fg">[Q]</span></span>'
+
+$.ajaxSetup({
+  beforeSend: function(xhr) {
+    xhr.setRequestHeader('X-XSRF-TOKEN', $('meta[name="csrf-token"]').attr('content'))
+  }
+})
+
+var Tradewars = function() {
+
+  var selectUniverse = function(id) {
+    if (universe !== id)
+      console.log('universe switch attempted')
+    $.post('/universes/', { 'id': universe.id }, function(result) {
+      if (result.status == 'ok')
+        showIntroANSI(showMainMenu)
+      else
+        showUniverses()
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    })
+  }
+
+  var menuEventHandler = function(map) {
+    var menuEvents = []
+    var number = ''
+    var max = ''
+    window.scrollTo(0, document.body.scrollHeight)
+    for (var i in map) {
+      if (map[i].max)
+        max = map[i].max
+      menuEvents[map[i].attribute] = [ map[i].nextFunction, map[i].nextFunctionArgs, (map[i].noreset ? true : false)]
+      $(document).on('click.handler', 'a[data-attribute="'+map[i].attribute+'"]', function(e) {
+        e.preventDefault()
+        if (!menuEvents[$(e.target).attr('data-attribute')][2])
+          $(document).off('.handler')
+        menuEvents[$(e.target).attr('data-attribute')][0].apply(null, menuEvents[$(e.target).attr('data-attribute')][1])
+      })
+    }
+    $(document).on('keyup.handler', null, function(e) {
+      if (e.which >= 48 && e.which <= 57) {
+        if ((max != '' && parseInt((number.toString() + (e.which - 48))) <= parseInt(max)) || max == '') {
+          $('.show-number').append(e.which - 48)
+          number = number.toString() + (e.which - 48)
+        }
+      }
+      for (var i in map) {
+        if (e.which == map[i].key && number == '') {
+          if (!map[i].noreset)
+            $(document).off('.handler')
+          if (map[i].addbreak)
+            el.append('<br />')
+          map[i].nextFunction.apply(null, map[i].nextFunctionArgs)
+        } else if (e.which == 13 && parseInt(number) > 0 && map[i].number == number) {
+          if (!map[i].noreset)
+            $(document).off('.handler')
+          if (map[i].addbreak)
+            el.append('<br />')
+          map[i].nextFunctionArgs.push(map[i].id)
+          map[i].nextFunction.apply(null, map[i].nextFunctionArgs)
+          number = ''
+        }
+      }
+      if (e.which == 13 && parseInt(number) > 0) {
+        // find and execute Invalid Number text
+        $('.show-number').removeClass('show-number')
+        for (var i in map) {
+          if (map[i].failure) {
+            map[i].nextFunctionArgs.push(parseInt(number))
+            map[i].nextFunction.apply(null, map[i].nextFunctionArgs)
+            if (!map[i].noreset)
+              $(document).off('.handler')
+            if (map[i].addbreak)
+              el.append('<br />')
+          }
+        }
+        number = ''
+        window.scrollTo(0, document.body.scrollHeight)
+      }
+    })
+  }
+
+  var showUniverses = function() {
+
+    var universesArray = []
+
+    $(document).on('click.select-universe', 'a[data-attribute="select-universe"]', function(e) {
+      e.preventDefault()
+      if (typeof universesArray[$(this).attr('data-id')] !== 'undefined') {
+        selectUniverse(universe = universesArray[$(this).attr('data-id')])
+        $(document).off('.select-universe')
+      }
+    })
+
+    $(document).on('keyup.select-universe', null, function(e) {
+      if (typeof universesArray[e.which] !== 'undefined') {
+        selectUniverse(universe = universesArray[e.which])
+        $(document).off('.select-universe')
+      }
+    })
+
+/*    AnsiLove.render('/intro/select', function(canvas, sauce) {
+      el.html(canvas)
+    }, { 'bits': 9, '2x': (retina ? 1 : 0) }) */
+
+    $.get('/universes/', function(result) {
+      var menu = $('<dl></dl>').addClass('ansi-green-fg')
+      var universes = result.universe
+      config = result.config
+      for (var i in universes) {
+        universesArray[parseInt(i + 65)] = universes[i]
+        menu.append($('<dt></dt>').html('&lt;<a href="" data-id="' + parseInt(i + 65) + '" data-attribute="select-universe">' + String.fromCharCode(i + 65) + '</a>&gt; ' + universes[i].name))
+        menu.append($('<dd></dd>').addClass('ansi-white-fg').html('<span class="ansi-magenta-fg">Sectors:</span> ' + addCommas(universes[i].sectors) + ', <span class="ansi-magenta-fg">Traders: </span> ' + addCommas(universes[i].traders) + ', <span class="ansi-magenta-fg">Ships:</span> ' + addCommas(universes[i].ships) + ', <span class="ansi-magenta-fg">Planets: </span> ' + addCommas(universes[i].planets) + ', <span class="ansi-magenta-fg">Ports: </span> ' + addCommas(universes[i].ports) + ', <span class="ansi-magenta-fg">Created:</span> ' + $.format.prettyDate(universes[i].created_at.date)))
+      }
+      el.html(menu)
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    })
+  }
+
+  var showIntroANSI = function(nextFunction) {
+    var controller = AnsiLove.animate('/intro/', function(canvas, sauce) {
+      el.html(canvas)
+      controller.play(14400, function() { })
+      pressAnyKey(nextFunction)
+    }, { 'bits': 9, '2x': (retina ? 1 : 0) })
+  }
+
+  var pressAnyKey = function(nextFunction) {
+    el.append('<br /><span class="ansi-magenta-fg">[Pause]</span>')
+    pageTimer = setTimeout(function() { el.append('<span class="ansi-magenta-fg"> - <strong>[Press Space or Enter to continue]</strong></span>') }, 10000)
+    $(document).one('keyup.anykey click.anykey', null, function(e) {
+      window.scrollTo(0, document.body.scrollHeight)
+      clearTimeout(pageTimer)
+      $(document).off('.anykey')
+      nextFunction()
+    })
+  }
+
+  var booleanKey = function(affirmFunction, denyFunction, defaultKey) {
+    window.scrollTo(0, document.body.scrollHeight)
+    $(document).on('click.boolean', '.yes', function(e) {
+      e.preventDefault()
+      $(document).off('.boolean')
+      affirmFunction()
+    })
+    $(document).on('click.boolean', '.no', function(e) {
+      e.preventDefault()
+      $(document).off('.boolean')
+      denyFunction()
+    })
+    $(document).on('keyup.boolean', null, function(e) {
+      switch (e.which) {
+        case 121:
+        case 89:
+          // yes
+          $(document).off('.boolean')
+          affirmFunction()
+          break
+        case 110:
+        case 78:
+          // no
+          $(document).off('.boolean')
+          denyFunction()
+          break
+        case 13:
+          if (typeof defaultKey == 'undefined')
+            break
+          $(document).off('.boolean')
+          if (defaultKey === false)
+            denyFunction()
+          else
+            affirmFunction()
+      }
+    })
+  }
+
+  var showBooleanPrompt = function(defaultKey) {
+    return ' (<a href="" class="ansi-bright-yellow-fg yes">Y</a><span class="ansi-bright-yellow-fg">/</span><a href="" class="ansi-bright-yellow-fg no">N</a>) [<span class="ansi-bright-cyan-fg">' + (defaultKey === true ? 'Y' : 'N' ) + '</span>]<br />'
+  }
+
+  var showMainMenu = function() {
+
+    menuEventHandler([
+      { 'nextFunction': playGame, 'attribute': 'play', 'key': 'T'.charCodeAt() },
+      { 'nextFunction': showHelp, 'nextFunctionArgs': [ showMainMenu ], 'attribute': 'help', 'key': 'I'.charCodeAt() },
+      { 'nextFunction': showScoresByValue, 'nextFunctionArgs': [ showMainMenu ], 'attribute': 'scores', 'key': 'H'.charCodeAt() },
+      { 'nextFunction': showUniverses, 'attribute': 'quit', 'key': 'x'.charCodeAt() }
+    ])
+
+    var menu = $('<ul></ul>').addClass('list-unstyled').addClass('ansi-bright-cyan-fg')
+    menu.append($('<li></li>').html('<span class="ansi-cyan-fg">==<span class="ansi-bright-cyan-fg">-<span class="ansi-bright-white-fg">- Trade Wars 2015 -</span>-</span>==</span>'))
+    menu.append($('<li></li>').html('<a href="" data-attribute="play">T</a> - Play Trade Wars 2015'))
+    menu.append($('<li></li>').html('<a href="" data-attribute="help">I</a> - Introduction &amp; Help'))
+    //menu.append($('<li></li>').html('<a href="" data-attribute="settings">S</a> - View Game Settings'))
+    menu.append($('<li></li>').html('<a href="" data-attribute="scores">H</a> - High scores'))
+    menu.append($('<li></li>').html('<a href="/" data-attribute="quit">X</a> - Exit'))
+
+    el.append('<br /><br />').append(menu)
+
+  }
+
+  var playGame = function() {
+    showLogPrompt('today')
+  }
+
+  var showLogPrompt = function(period) {
+    if (period == 'today') {
+      el.html('Show today\'s log?' + showBooleanPrompt())
+      booleanKey(showLogTimestampPrompt, showWelcomeScreen, false)
+    }
+  }
+
+  var showLogTimestampPrompt = function() {
+    el.append('<span class="ansi-magenta-fg">Include time/date stamp?' + showBooleanPrompt())
+    booleanKey(showLogWithTimestamp, showLogWithoutTimestamp, false) 
+  }
+
+  var showLogWithTimestamp = function(period, timestamps) {
+    el.html('<span class="ansi-blue-fg">  -=-=-=-=-=-=-=-=-=- <span class="ansi-bright-cyan-fg">Trade Wars</span> <span class="ansi-bright-red-fg">2015</span> -=-=-=-=-=-=-=-=-=-</span><br />')
+    $.get('/log/', function(result) {
+      if (result.length == 0)
+        el.append('No log entries today.')
+      for (var i in result) {
+        el.append(getLogDate(result[i].created_at))
+        el.append('<br />' + result[i].message)
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      pressAnyKey(showWelcomeScreen)
+    })
+  }
+
+  var showLogWithoutTimestamp = function(period, timestamps) {
+    el.html('<span class="ansi-blue-fg">  -=-=-=-=-=-=-=-=-=- <span class="ansi-bright-cyan-fg">Trade Wars</span> <span class="ansi-bright-red-fg">2015</span> -=-=-=-=-=-=-=-=-=-</span><br />')
+    $.get('/log/', function(result) {
+      if (result.length == 0)
+        el.append('No log entries today.')
+      for (var i in result) {
+        el.append('<br />' + result[i].message)
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      pressAnyKey(showWelcomeScreen)
+    })
+  }
+
+  var showWelcomeScreen = function() {
+    el.html('Initializing...<br /><br />')
+    el.append(' &nbsp; &nbsp; &nbsp; Hello <span class="ansi-bright-cyan-fg">' + config.username + '</span>, welcome to:<br /><br />')
+    el.append(' &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="ansi-bright-yellow-fg">Trade Wars 2015</span><br /><br />')
+    el.append('(C) Copyright 1986 John Pritchett.  All rights reserved.<br />')
+    el.append(' &nbsp; &nbsp; Brought to you by EIS<br />')
+    el.append(' &nbsp; &nbsp; Written by Gary Martin, Mary Ann Martin and John Pritchett<br />')
+
+    if (universe.user_has_trader) {
+      if (universe.user_login_delay)
+        pressAnyKey(getOutLoser)
+      else
+        pressAnyKey(showMessages)
+    } else {
+      pressAnyKey(newUser)
+    }
+  }
+
+  var getOutLoser = function() {
+    el.append('<br /><br /><span class="ansi-bright-red-fg ansi-bright-black-bg">You destroyed your own ship!</span><br />You must wait for <span class="ansi-bright-yellow-fg">' + universe.user_login_delay + '</span> day(s) to get back in.<br />')
+    pressAnyKey(showUniverses)  
+  }
+
+  var newUser = function() {
+    el.append('<br /><br />You were not found in the player database.<br />')
+    el.append('<span class="ansi-bright-white-fg ansi-blue-bg">Would you like to start a new character in this game?  (Type <span class="ansi-bright-yellow-fg ansi-black-bg"><a href="" data-attribute="yes">Y</a></span> or <span class="ansi-bright-yellow-fg ansi-black-bg"><a href="" class="no">N</a></span>)&nbsp;</span>')
+    booleanKey(newUserName, showUniverses, false)
+  }
+
+  var newUserName = function() {
+    el.append('<br /><br /><span class="ansi-bright-yellow-fg">Great!</span> You\'re on your way to becoming a Galactic Power!<br /><br />')
+    el.append('Notice: If you don\'t play for <span class="ansi-bright-yellow-fg">30</span> days, your ship<br />')
+    el.append('and your assets will be removed to make room for someone else.<br /><br />')
+    el.append('<span class="ansi-bright-cyan-fg">Do you wish to make up a new Alias for your Trader Name,<br />or would you rather use your BBS name of <span class="ansi-bright-yellow-fg">' + config.username + '</span>?<br />')
+    el.append('<span class="ansi-bright-yellow-fg">Use <span class="ansi-magenta-fg">(</span><span class="ansi-green-fg"><a href="" class="ansi-green-fg" data-attribute="newname">N</a></span><span class="ansi-magenta-fg">)</span>ew Name or <span class="ansi-magenta-fg">(</span><span class="ansi-green-fg"><a href="" class="ansi-green-fg" data-attribute="bbsname">B</a></span><span class="ansi-magenta-fg">)</span>BS Name <span class="ansi-bright-cyan-fg">[B]<span> ?</span>')
+
+    $(document).on('click.nameselect', '.newname', function(e) {
+      e.preventDefault()
+      $(document).off('.nameselect')
+      newUserNewName()
+    })
+
+    $(document).on('click.nameselect', '.bbsname', function(e) {
+      e.preventDefault()
+      $(document).off('.nameselect')
+      config.name = config.username
+      newUserShipName()
+    })
+
+    $(document).on('keyup.nameselect', null, function(e) {
+      switch (e.which) {
+        case 110:
+        case 78:
+          // newname
+          $(document).off('.nameselect')
+          newUserNewName()
+          break
+        case 13:
+        case 98:
+        case 66:
+          // bbsname
+          $(document).off('.nameselect')
+          config.name = config.username
+          newUserShipName()
+          break
+      }
+    })
+  }
+
+  var newUserNewName = function() {
+    $('#newUserNewName').html('')
+    el.append('<br /><br /><form id="newUserNewName"><div class="form-group"><label for="name"><span class="ansi-magenta-fg">What Alias do you want to use?</span></label><input type="text" class="form-control ansi-magenta-fg" id="name"></div></form>')
+    $('#newUserNewName #name').focus()
+    $(document).on('submit.newuser', '#newUserNewName', function(e) {
+      e.preventDefault()
+      $(document).off('.newuser')
+      $('#newUserNewName #name').blur()
+      config.name = $('<div />').text($('#newUserNewName #name').val()).html()
+      // check server for availability
+      $.post('/create/checkname', { 'name': config.name }, function(result) {
+        if (result.status == 'available') {
+          el.append('<br />That alias would look like this in the game:<br />')
+          el.append('<span class="ansi-bright-yellow-fg">Commander ' + config.name + ' is attacking with 10,000 fighters!</span><br /><br />')
+          el.append(config.name + ' <span class="ansi-magenta-fg">is what you want? (<a href="" class="ansi-magenta-fg" data-attribute="yes">Y</a>/<a href="" class="ansi-magenta-fg" data-attribute="no">N</a>)')
+          $('#newUserNewName').replaceWith(' <span class="ansi-magenta-fg">' + config.name + '</span><br />')
+          booleanKey(newUserShipName, newUserNewName)
+        } else {
+          el.append('Sorry, you cannot use the name ' + config.name + ' as it is already in use.')
+          newUserNewName()
+        }
+      }).fail(function(result) {
+        if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+          el.append(result.responseJSON.error + '<br />')
+        newUserNewName()
+      })
+    })
+  }
+
+  var newUserCreate = function() {
+    // create user account on server with config.name
+    $.post('/create/', { 'name': config.name, 'initial_ship_manufacturer': config.initial_ship_manufacturer.id, 'initial_ship_name': config.initial_ship_name, 'initial_planet_class': config.initial_planet_type.id, 'initial_planet_name': config.initial_planet_name }, function(result) {
+      if (result.status == 'ok')
+        getSectorData(displayCurrentSector)
+      else
+        newUser()
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+      newUser()
+    })
+  }
+
+  var newUserShipName = function() {
+    $('#newUserShipName').html('')
+    config.initial_ship_manufacturer = getRandom(config.manufacturers)
+    el.append('<br /><br /><span class="ansi-bright-red-fg ansi-bright-black-bg">Your ship is being initialized.</span><br /><br />')
+    el.append('<span class="ansi-bright-cyan-fg">You must now christen your new ' + config.initial_ship_manufacturer.name + ' ' + config.initial_ship.class + '</span><br />')
+    el.append('<span class="ansi-bright-cyan-fg">Choose a name carefully as you will have it for a while!</span><br /><br />')
+    el.append('<form id="newUserShipName"><div class="form-group"><label for="name"><span class="ansi-bright-cyan-fg">What do you want to name your ship? (30 letters)</span></label><input type="text" class="form-control ansi-yellow-fg" id="name"></div></form>')
+    $('#newUserShipName #name').focus()
+    $(document).on('submit.newuser', '#newUserShipName', function(e) {
+      e.preventDefault()
+      $(document).off('.newuser')
+      $('#newUserShipName #name').blur()
+      config.initial_ship_name = $('<div />').text($('#newUserShipName #name').val()).html()
+      el.append('<br />' + config.initial_ship_name + ' <span class="ansi-bright-cyan-fg">is what you want? (<a href="" class="ansi-cyan-fg" data-attribute="yes">Y</a>/<a href="" class="ansi-cyan-fg" data-attribute="no">N</a>)</span>')
+      $('#newUserShipName').replaceWith(' <span class="ansi-yellow-fg">' + config.initial_ship_name + '</span><br />')
+      booleanKey(newUserPlanetName, newUserShipName)
+    })
+  }
+
+  var newUserPlanetName = function() {
+    config.initial_planet_type = getRandom(config.planet_types)
+    el.append('<br /><br />You will be started with your very own home planet. It\'s your option<br />to abandon it or to keep it and try to build it into a powerful base<br />of your own.<br /><br />')
+    el.append('<form id="newUserPlanetName"><div class="form-group"><label for="name"><span class="ansi-magenta-fg">What do you want to name your home planet? (Class <span class="ansi-bright-white-fg ansi-blue-bg">' + config.initial_planet_type.class + '</span>, ' + config.initial_planet_type.desc + ')</span></label><input type="text" class="form-control ansi-yellow-fg" id="name"></div></form>')
+    $('#newUserPlanetName #name').focus()
+    $(document).on('submit.newuser', '#newUserPlanetName', function(e) {
+      e.preventDefault()
+      $(document).off('.newuser')
+      $('#newUserPlanetName #name').blur()
+      config.initial_planet_name = $('<div />').text($('#newUserPlanetName #name').val()).html()
+      $('#newUserPlanetName').replaceWith(' <span class="ansi-yellow-fg">' + config.initial_planet_name + '</span><br />')
+      newUserCreate()
+    })
+  }
+
+  var showMessages = function() {
+    el.append('<br /><br />')
+    el.append('Searching for messages received since your last time on<span class="ansi-yellow-fg">:</span><br />')
+    el.append('No messages received.')
+    pressAnyKey(showHazSect)
+  }
+
+  var showHazSect = function() {
+    el.append('<br /><br />')
+    el.append('<span class="ansi-bright-white-fg ansi-blue-bg">&lt;Scanning for Hazardous Sectors you have marked to Avoid&gt;</span><br /><br />')
+    el.append('<span class="ansi-red-fg">No Sectors are currently being avoided.</span>')
+    showTurnsAvail()
+  }
+
+  var showTurnsAvail = function() {
+    el.append('<br /><br />')
+    el.append('<span class="ansi-yellow-fg">You have <span class="ansi-bright-yellow-fg">' + universe.turns_remaining + '</span> turns this Stardate.</span>')
+    getSectorData(displayCurrentSector)
+  }
+
+  var getSectorData = function(nextFunction) {
+    $.get('/sector/current/', function(data) {
+      nextFunction(data)
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    })
+  }
+
+  var displayCurrentSector = function(data) {
+    if (!data.ship) {
+      el.append('<br /><br /><span class="ansi-bright-yellow-fg">You managed to destroy your ship your last time on.<br /><br /><span class="ansi-bright-red-fg ansi-bright-black-bg">Your ship is being initialized.</span><br />')
+      createReplacementShip()
+    } else if (data.planet) {
+      displayPlanet(data)
+    } else {
+      if (data.sector.navhaz > 0)
+        el.append('<br /><br /><span class="ansi-bright-red-fg ansi-bright-black-bg">WARNING! WARNING!</span> Space Debris/Asteroids narrowly avoided!')
+      displaySector(data)
+      displaySectorCommand(data)
+    }
+  }
+
+  var displaySector = function(data) {
+    el.append('<br /><br /><span class="ansi-bright-green-fg">Sector</span> &nbsp;<span class="ansi-bright-yellow-fg">:</span> <span class="ansi-bright-cyan-fg">' + data.sector.number + '</span> in ' + (data.sector.cluster != '' ? '<span class="ansi-bright-green-fg">' + data.sector.cluster + '.</span>' : '<span class="ansi-blue-fg">uncharted space.</span>') + '<br />')
+    if (data.sector.beacon)
+      el.append('<span class="ansi-magenta-fg">Beacon</span> &nbsp;<span class="ansi-bright-yellow-fg">:</span> <span class="ansi-red-fg">' + data.sector.beacon + '</span><br />')
+    if (data.sector.port)
+      el.append('<span class="ansi-magenta-fg">Ports</span> &nbsp; <span class="ansi-bright-yellow-fg">:</span> <span class="ansi-bright-cyan-fg">' + data.sector.port.name + '</span><span class="ansi-bright-white-fg">,</span> <span class="ansi-magenta-fg">Class <span class="ansi-bright-cyan-fg">' + data.sector.port.class + '</span> (<span class="ansi-green-fg">' + resolvePortClass(data.sector.port.class) + '</span>)<br />')
+    if (data.sector.number == 1) {
+      el.append('<span class="ansi-magenta-fg">Planets</span> <span class="ansi-bright-yellow-fg">:</span> (<span class="ansi-bright-yellow-fg">M</span>) Terra<br />')
+    } else if (data.sector.planets.length > 0) {
+      el.append('<span class="ansi-magenta-fg">Planets</span> <span class="ansi-bright-yellow-fg">:</span> ')
+      for (var i in data.sector.planets) {
+        if (i > 0)
+          el.append(' &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ')
+        if (data.sector.planets[i].shielded)
+          el.append('<span class="ansi-bright-red-fg">&lt;&lt;&lt;&lt;</span> (<span class="ansi-bright-yellow-fg">' + data.sector.planets[i].class + '</span>) <span class="ansi-blue-fg">' + data.sector.planets[i].name + '</span> <span class="ansi-bright-red-fg">&gt;&gt;&gt;&gt;</span> (Shielded)<br />')
+        else
+          el.append('(<span class="ansi-bright-yellow-fg">' + data.sector.planets[i].class + '</span>) ' + data.sector.planets[i].name + '<br />')
+      }
+    }
+    if (data.traders.length > 0) {
+      el.append('<span class="ansi-yellow-fg">Traders</span> <span class="ansi-bright-yellow-fg">:</span> ')
+      for (var i in data.traders) {
+        if (i > 0)
+          el.append(' &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ')
+        el.append((data.traders[i].trader.alignment >= 0 ? '<span class="ansi-bright-cyan-fg">' : '<span class="ansi-red-fg">') + resolveTitle(data.traders[i].trader.experience, data.traders[i].trader.alignment) + ' ' + data.traders[i].trader.name + '</span><span class="ansi-bright-yellow-fg">,</span> w/ <span class="ansi-bright-yellow-fg">' + data.traders[i].fighters + '</span> ftrs<span class="ansi-bright-yellow-fg">,</span><br /> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;in <span class="ansi-cyan-fg">' + data.traders[i].name + '</span> (' + data.traders[i].manufacturer.name + ' ' + data.traders[i].type.class + ')<br />')
+      }
+    }
+    if (data.ships.length > 0) {
+      el.append('<span class="ansi-yellow-fg">Ships</span> &nbsp; <span class="ansi-bright-yellow-fg">:</span> ')
+      for (var i in data.ships) {
+        if (i > 0)
+          el.append(' &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ')
+        el.append('<span class="ansi-bright-cyan-fg">' + data.ships[i].name + '</span> <span class="ansi-magenta-fg">[' + (data.ships[i].trader == null ? '<span class="ansi-bright-red-fg">Abandoned</span>' : '<span class="ansi-red-fg">Owned by</span>') + ']' + (data.ships[i].trader != null ? ' ' + data.ships[i].trader.name : '') + '</span><span class="ansi-bright-yellow-fg">,</span> w/ <span class="ansi-bright-yellow-fg">' + data.ships[i].fighters + '</span> ftrs<span class="ansi-bright-yellow-fg">,</span><br /> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(' + data.ships[i].manufacturer.name + ' ' + data.ships[i].type.class + ')<br />')
+      }
+    }
+    if (data.sector.fighters)
+      el.append('<span class="ansi-magenta-fg">Fighters</span><span class="ansi-bright-yellow-fg">:</span> <span class="ansi-bright-cyan-fg">' + data.sector.fighters.quantity + '</span> ' + (data.sector.fighters.trader.id == data.trader.id ? '<span class="ansi-magenta-fg">(yours)</span>' : '<span class="ansi-bright-yellow-fg">(belong to ' + data.sector.fighters.trader.name + ')</span>') + ' <span class="ansi-yellow-fg">[' + resolveFighterMode(data.sector.fighters.mode) + ']</span><br />')
+    if (data.sector.navhaz > 0)
+      el.append('<span class="ansi-magenta-fg">NavHaz</span> &nbsp;<span class="ansi-bright-yellow-fg">:</span> <span class="ansi-bright-red-fg ansi-bright-black-bg">' + data.sector.navhaz + (data.sector.navhaz < 10 ? ' ' : '') + '</span><span class="ansi-magenta-fg">%</span> <span class="ansi-blue-fg">(<span class="ansi-cyan-fg">Space Debris/Asteroids</span>)</span><br />')
+    if (data.sector.mines.length > 0) {
+      el.append('<span class="ansi-magenta-fg">Mines</span> &nbsp <span class="ansi-bright-yellow-fg">:</span> ')
+      for (var i in data.sector.mines) {
+        if (i > 0)
+          el.append(' &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ')
+        el.append('<span class="ansi-bright-red-fg ansi-bright-black-bg">' + data.sector.mines[i].quantity + (data.sector.mines[i].quantity < 10 ? ' ' : '') + '</span> <span class="ansi-magenta-fg">(<span class="ansi-green-fg">Type <span class="ansi-bright-yellow-fg">' + data.sector.mines[i].type + '</span> ' + resolveMineType(data.sector.mines[i].type) + '</span>)</span> ' + (data.sector.mines[i].trader.id == data.trader.id ? '<span class="ansi-magenta-fg">(yours)</span>' : '<span class="ansi-bright-yellow-fg">(belong to ' + data.sector.mines[i].trader.name + ')</span>') + '<br />')
+      }
+    }
+    el.append('<span class="ansi-bright-green-fg">Warps to Sector(s)</span> <span class="ansi-bright-yellow-fg">:</span> ' + formatWarpsList(data.sector.warps))
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  var displaySectorCommand = function(data) {
+    el.append(sectorPrompt.replace('#SECTORNUMBER', data.sector.number))
+    menuEventHandler([
+      { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Re-Display&gt;</span>'); displaySector(data); displaySectorCommand(data); }, 'attribute': 'display', 'key': 'D'.charCodeAt() },
+      { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Re-Display&gt;</span>'); displaySector(data); displaySectorCommand(data); }, 'attribute': 'display', 'key': 13 },
+      { 'nextFunction': landOnPlanet, 'nextFunctionArgs': [ data ], 'attribute': 'land', 'key': 'L'.charCodeAt() },
+      { 'nextFunction': sectorMove, 'nextFunctionArgs': [ data ], 'attribute': 'move', 'key': 'M'.charCodeAt() },
+      { 'nextFunction': sectorHelp, 'attribute': 'help', 'key': 49, 'noreset': true },
+      { 'nextFunction': sectorMenu, 'nextFunctionArgs': [ data ], 'attribute': 'menu', 'key': 191, 'noreset': true }
+    ])
+  }
+
+  var sectorHelp = function() {
+
+  }
+
+  var sectorMenu = function(data) {
+    el.append('<br /><br />')
+
+    var navigationMenu = $('<ul></ul>').addClass('list-unstyled')
+    var computerMenu = $('<ul></ul>').addClass('list-unstyled')
+    var tacticalMenu = $('<ul></ul>').addClass('list-unstyled')
+
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="display">D</a>&gt;</span> <span class="ansi-bright-cyan-fg">Re-Display Sector</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="port">P</a>&gt;</span> <span class="ansi-bright-cyan-fg">Port and Trade</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="move">M</a>&gt;</span> <span class="ansi-bright-cyan-fg">Move to a Sector</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="land">L</a>&gt;</span> <span class="ansi-bright-cyan-fg">Land on a Planet</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="scan">S</a>&gt;</span> <span class="ansi-bright-cyan-fg">Long Range Scan</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="beacon">R</a>&gt;</span> <span class="ansi-bright-cyan-fg">Release Beacon</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="tow">W</a>&gt;</span> <span class="ansi-bright-cyan-fg">Tow SpaceCraft</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="move">N</a>&gt;</span> <span class="ansi-bright-cyan-fg">Move to NavPoint</span>'))
+    navigationMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="quit">Q</a>&gt;</span> <span class="ansi-bright-yellow-fg">Quit and Exit</span>'))
+
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="computer">C</a>&gt;</span> <span class="ansi-bright-cyan-fg">Onboard Computer</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="transporter">X</a>&gt;</span> <span class="ansi-bright-cyan-fg">Transporter Pad</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="shipinfo">I</a>&gt;</span> <span class="ansi-bright-cyan-fg">Ship Information</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="corp">T</a>&gt;</span> <span class="ansi-bright-cyan-fg">Corporate Menu</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="genesis">U</a>&gt;</span> <span class="ansi-bright-cyan-fg">Use Genesis Torp</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="jettison">J</a>&gt;</span> <span class="ansi-bright-cyan-fg">Jettison Cargo</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="interdict">B</a>&gt;</span> <span class="ansi-bright-cyan-fg">Interdict Ctrl</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="help">!</a>&gt;</span> <span class="ansi-bright-yellow-fg">Main Menu Help</span>'))
+    computerMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="docs">Z</a>&gt;</span> <span class="ansi-bright-yellow-fg">TradeWars Docs</span>'))
+
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="attack">A</a>&gt;</span> <span class="ansi-bright-cyan-fg">Attack Enemy Ship</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="probe">E</a>&gt;</span> <span class="ansi-bright-cyan-fg">Sub-space EtherProbe</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="figs">F</a>&gt;</span> <span class="ansi-bright-cyan-fg">Take or Leave Fighters</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="showfigs">G</a>&gt;</span> <span class="ansi-bright-cyan-fg">Show Deployed Fighters</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="mines">H</a>&gt;</span> <span class="ansi-bright-cyan-fg">Handle Space Mines</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="showmines">K</a>&gt;</span> <span class="ansi-bright-cyan-fg">Show Deployed Mines</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="buildport">O</a>&gt;</span> <span class="ansi-bright-cyan-fg">Starport Construction</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="navpoint">Y</a>&gt;</span> <span class="ansi-bright-cyan-fg">Set NavPoints</span>'))
+    tacticalMenu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="status">V</a>&gt;</span> <span class="ansi-bright-yellow-fg">View Game Status</span>'))
+
+    var menuContainer = $('<div></div>').addClass('row')
+    menuContainer.append($('<div></div>').addClass('col-md-3').html('<div style="text-align: center" class="ansi-magenta-fg">Navigation</span><br /><span class="ansi-bright-yellow-fg">=<span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span>==<span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span>=</div>').append(navigationMenu))
+    menuContainer.append($('<div></div>').addClass('col-md-3').html('<div style="text-align: center" class="ansi-magenta-fg">Computer</span><br /><span class="ansi-bright-yellow-fg">=<span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span><span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span>=</span></div>').append(computerMenu))
+    menuContainer.append($('<div></div>').addClass('col-md-3').html('<div style="text-align: center" class="ansi-magenta-fg">Tactical</span><br /><span class="ansi-bright-yellow-fg">=<span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span><span class="ansi-green-fg">-</span>=<span class="ansi-green-fg">-</span>=</div>').append(tacticalMenu))
+    el.append(menuContainer)
+    el.append(sectorPrompt.replace('#SECTORNUMBER', data.sector.number))
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  var sectorMove = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Move&gt;</span><br />')
+    el.append('<span class="ansi-bright-green-fg">Warps to Sector(s)</span> <span class="ansi-bright-yellow-fg">:</span> ' + formatWarpsList(data.sector.warps) + '<br />')
+    el.append('<span class="ansi-magenta-fg show-number">To which Sector <span class="ansi-bright-yellow-fg">[<a href="" class="ansi-bright-yellow-fg" data-attribute="sector" data-id="' + (config.last_sector ? config.last_sector.id : data.sector.id ) + '">' + (config.last_sector ? config.last_sector.number : data.sector.number ) + '</a>]</span> ? ')
+    menuEventHandler([
+      { 'nextFunction': moveToSector, 'nextFunctionArgs': [ data ], 'failure': true, 'max': universe.sectors },
+      { 'nextFunction': moveToSector, 'nextFunctionArgs': [ data, (config.last_sector ? config.last_sector.number : data.sector.number) ], 'key': 13 },
+      { 'nextFunction': moveToSector, 'nextFunctionArgs': [ data ], 'attribute': 'sector', 'get_id_from_attribute': true }
+    ])
+  }
+
+  var moveToSector = function(data, id) {
+    if (id == data.sector.number) {
+      el.append('<br /><br />You are already in that sector!<br />')
+      displaySectorCommand(data)
+    } else if (typeof id !== 'number' && (id % 1) === 0) {
+      el.append('<br /><span class="ansi-bright-red-fg ansi-bright-black-bg">Illegal number.</span><br />')
+      displaySectorCommand(data)
+    } else {
+      for (var i in data.sector.warps) {
+        if (data.sector.warps[i].number == id) {
+          moveToSectorID(data, id, id, 'adjacent', [])
+          return;
+        }
+      }
+      el.append('<br />That Warp Lane is not adjacent.<br />')
+      el.append('<br /><span class="ansi-bright-blue-fg ansi-bright-black-bg processing">Computing shortest path...</span>')
+      $.post('/sector/', { 'task': 'getpath', 'sector_id': data.sector.id, 'ship_id': data.ship.id, 'destination': id }, function(result) {
+        $('.processing').removeClass('ansi-bright-black-bg processing').html('Computed.')
+        var nextHop = ''
+        el.append('<br /><br />The shortest path <span class="ansi-magenta-fg">(' + (result.length - 1) + ' hops, ' + (result.length * data.ship.type.turns_per_warp) + ' turns)</span> from sector <span class="ansi-bright-yellow-fg">' + data.sector.number + '</span> to sector <span class="ansi-bright-yellow-fg">' + id + '</span> is<span class="ansi-bright-yellow-fg">:</span><br />')
+        for (var i in result) {
+          if (i == 0)
+            el.append('<span class="ansi-yellow-fg">' + result[i] + '</span>')
+          else
+            el.append(result[i])
+          if (i < result.length - 1)
+            el.append(' <span class="ansi-bright-yellow-fg">&gt;</span> ')
+        }
+        result.shift()
+        nextHop = result[0]
+        el.append('<br /><br /><span class="ansi-magenta-fg">Engage the Autopilot? <span class="ansi-bright-yellow-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="yes">Y</a>/<a href="" class="ansi-bright-yellow-fg" data-attribute="no">N</a>/<a href="" class="ansi-bright-yellow-fg" data-attribute="step">Single step</a>/<a href="" class="ansi-bright-yellow-fg" data-attribute="express">Express</a>)</span> [Y]</span> ')
+        menuEventHandler([
+          { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Auto Pilot Engaging&gt;</span><br />'); moveToSectorID(data, id, nextHop, 'autopilot', result) }, 'attribute': 'yes', 'key': 'Y'.charCodeAt() },
+          { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Auto Pilot Engaging&gt;</span><br />'); moveToSectorID(data, id, nextHop, 'autopilot', result) }, 'attribute': 'yes', 'key': 13 },
+          { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Auto Pilot Engaging&gt;</span><br />'); moveToSectorID(data, id, nextHop, 'single', result) }, 'attribute': 'single', 'key': 'S'.charCodeAt() },
+          { 'nextFunction': function() { el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Auto Pilot Engaging&gt;</span><br />'); moveToSectorID(data, id, nextHop, 'express', result) }, 'attribute': 'express', 'key': 'E'.charCodeAt() },
+          { 'nextFunction': displaySectorCommand, 'nextFunctionArgs': [ data ], 'attribute': 'no', 'key': 'N'.charCodeAt() }
+        ])
+      }).fail(function(result) {
+        el.append('<br />*** <span class="ansi-bright-red-fg ansi-bright-black-bg">Error</span> - ')
+        if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+          el.append(result.responseJSON.error + '<br />')
+        // TODO clear avoids boolean and redisplay prompt
+      })
+    }
+  }
+
+/*
+  var progressBar = function(data) {
+    if (!$('.progress-bar').length) {
+      console.log('creating progress-bar element')
+      el.append('<div class="progress"><div class="progress-bar" role="progressbar" style="width: 0"></div></div>')
+      progressBarTimer = setTimeout(function() { progressBar(data) }, 333)
+    } else {
+      var width = parseInt($('.progress-bar').css('width'))
+      var parentWidth = parseInt($('.progress-bar').parent().css('width'))
+      var chunkSize = parentWidth / data.ship.type.turns_per_warp
+      console.log('progress-bar found with parentWidth: ' + parentWidth + ', width: ' + width + ', chunkSize: ' + chunkSize)
+      if (width + chunkSize >= parentWidth) {
+        console.log('progress-bar maxed')
+        $('.progress-bar').css('width', '100%')
+      } else {
+        console.log('progress-bar extended')
+        $('.progress-bar').css('width', (width + chunkSize) + 'px')
+        progressBarTimer = setTimeout(function() { progressBar(data) }, 333)
+      }
+    }
+  }
+ */
+
+  var moveToSectorID = function(data, destination, nextHop, method, route) {
+    if (method != 'adjacent')
+      el.append('<br /><span class="ansi-yellow-fg">Auto Warping to sector</span> <span class="ansi-bright-yellow-fg">' + nextHop + '</span>')
+    el.append('<div id="progress-bar" style="padding-top: 2em"></div>')
+    $('#progress-bar').progressTimer({
+      timeLimit: data.ship.type.turns_per_warp,
+      onFinish: function() {
+        $.post('/sector/', { 'task': 'move', 'sector_id': data.sector.id, 'ship_id': data.ship.id, 'destination': nextHop }, function(data) {
+          $('#progress-bar').remove()
+          route.shift()
+          nextHop = route[0]
+          displaySector(data)
+          if (data.sector.number == destination) {
+            displaySectorCommand(data)
+            return
+          } else if (method == 'autopilot' && (data.sector.port || data.sector.planets.length > 0 || data.traders.length > 0 || data.ships.length > 0 || data.sector.fighters || data.sector.navhaz > 0 || data.sector.mines.length > 0)) {
+            var autopilotPrompt = '<br /><br /><span class="ansi-bright-cyan-fg">Stop in this sector <span class="ansi-bright-yellow-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="yes">Y</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="no">N</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="express">E</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="info">I</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="portreport">R</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="scan">S</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="display">D</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="port">P</a>,<a href="" class="ansi-bright-yellow-fg" data-attribute="help">?</a>) (?=Help)</span> <span class="ansi-yellow-fg">[N]</span> ? </span> '
+            el.append(autopilotPrompt)
+            menuEventHandler([
+              { 'nextFunction': displaySectorCommand, 'nextFunctionArgs': [ data ], 'attribute': 'yes', 'key': 'Y'.charCodeAt() },
+              { 'nextFunction': moveToSectorID, 'nextFunctionArgs': [ data, destination, nextHop, method, route ], 'attribute': 'no', 'key': 'N'.charCodeAt(), 'addbreak': true },
+              { 'nextFunction': moveToSectorID, 'nextFunctionArgs': [ data, destination, nextHop, method, route ], 'key': 13, 'addbreak': true },
+              { 'nextFunction': moveToSectorID, 'nextFunctionArgs': [ data, destination, nextHop, 'express', route ], 'attribute': 'express', 'key': 'E'.charCodeAt() },
+              { 'nextFunction': function() { displaySector(data); el.append(autopilotPrompt); window.scrollTo(0, document.body.scrollHeight) }, 'attribute': 'display', 'key': 'D'.charCodeAt(), 'noreset': true }
+            ])
+          } else {
+            el.append('<br />')
+            moveToSectorID(data, destination, nextHop, method, route)
+          }
+        }).fail(function(result) {
+          if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+            el.append(result.responseJSON.error + '<br />')
+        }).always(function() {
+          window.scrollTo(0, document.body.scrollHeight)
+        })
+      }
+    })
+  }
+
+  var resolveTitle = function(exp, align) {
+    for (var i in config.titles)
+      if (config.titles[i].alignment == (align >= 0 ? 'positive' : 'negative') && exp < config.titles[i].experience)
+        return config.titles[i - 2].title;
+  }
+
+  var resolveFighterMode = function(mode) {
+    switch(mode) {
+      case 0:
+        return 'Offensive'
+      case 1:
+        return 'Defensive'
+      case 2:
+        return 'Toll'
+    }
+  }
+
+  var resolveMineType = function(type) {
+    switch (type) {
+      case 1:
+        return 'Armid'
+      case 2:
+        return 'Limpet'
+    }
+  }
+
+  var resolvePortClass = function(id) {
+    var s = '<span class="ansi-bright-cyan-fg">S</span>'
+    var b = '<span class="ansi-green-fg">B</span>'
+    var special = '<span class="ansi-bright-cyan-fg">Special</span>'
+    switch (id) {
+      case 0:
+        return special
+      case 1:
+        return b + b + s
+      case 2:
+        return b + s + b
+      case 3:
+        return s + b + b
+      case 4:
+        return s + s + b
+      case 5:
+        return s + b + s
+      case 6:
+        return b + s + s
+      case 7:
+        return s + s + s
+      case 8:
+        return b + b + b
+      case 9:
+        return special
+    }
+  }
+
+  var createReplacementShip = function() {
+    config.replacement_ship_manufacturer = getRandom(config.manufacturers)
+    el.append('<span class="ansi-bright-cyan-fg">You must now christen your new ' + config.replacement_ship_manufacturer.name + ' ' + config.replacement_ship.class + '<br />Choose a name carefully as you will have it for a while!<br /><br />')
+    createReplacementShipName()
+  }
+
+  var createReplacementShipName = function() {
+    el.append('<form id="createReplacementShip"><div class="form-group"><label for="name"><span class="ansi-bright-cyan-fg">What do you want to name your ship? (30 letters)</span></label><input type="text" class="form-control ansi-yellow-fg" id="name"></div></form>')
+    $('#createReplacementShip #name').focus()
+    $(document).on('submit.replacementShip', '#createReplacementShip', function(e) {
+      e.preventDefault()
+      $(document).off('.replacementShip')
+      $('#createReplacementShip #name').blur()
+      config.replacement_ship_name = $('<div />').text($('#createReplacementShip #name').val()).html()
+      el.append('<br />' + config.replacement_ship_name + ' <span class="ansi-bright-cyan-fg">is what you want? (<a href="" class="ansi-cyan-fg" data-attribute="yes">Y</a>/<a href="" class="ansi-cyan-fg" data-attribute="no">N</a>)</span>')
+      $('#createReplacementShip').replaceWith(' <span class="ansi-yellow-fg">' + config.replacement_ship_name + '</span><br />')
+      booleanKey(createReplacementShipComplete, createReplacementShipName)
+    })
+  }
+
+  var createReplacementShipComplete = function() {
+    $.post('/ship/', { 'task': 'replacementship', 'replacement_ship_manufacturer': config.replacement_ship_manufacturer.id, 'replacement_ship_name': config.replacement_ship_name }, function(result) {
+      if (result.status == 'ok') {
+        el.append('<br /><span class="ansi-bright-red-fg ansi-bright-black-bg">You are being moved to sector 1</span><br />')
+        getSectorData(displayCurrentSector)
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+      createReplacementShipName()
+    })
+  }
+
+  var landOnPlanet = function(data) {
+    el.append('<br /><span class="ansi-bright-cyan-fg">&lt;Preparing ship to land on planet surface&gt;<br /><br />&lt;Atmospheric maneuvering system engaged&gt;<br />')
+    var menuEvents = [
+      { 'nextFunction': displaySectorCommand, 'nextFunctionArgs': [ data ], 'attribute': 'display', 'key': 'Q'.charCodeAt() },
+      { 'nextFunction': displaySectorCommand, 'nextFunctionArgs': [ data ], 'attribute': 'display', 'key': 13 },
+    ]
+    if (data.sector.planets.length === 0) {
+      el.append('There isn\'t a planet in this sector.<br />You can create one with a Genesis Torpedo.')
+      displaySectorCommand(data)
+    } else if (data.sector.planets.length === 1) {
+      landOnPlanetID(data, data.sector.planets[0].id)
+    } else {
+      var landPrompt = $('<span class="ansi-magenta-fg"></span>').html('Land on which planet <span class="ansi-bright-yellow-fg">&lt;Q to abort&gt;</span> ? ')
+      el.append('Registry# and Planet Name<br /><span class="ansi-bright-yellow-fg">------------------------------------------------------</span><br />')
+      menuEvents.push({ 'nextFunction': function() { el.append('<br />That planet is not in this sector.<br /><br />'); el.append(landPrompt.addClass('show-number')); }, 'nextFunctionArgs': [], 'failure': true, 'noreset': true })
+      for (var i in data.sector.planets) {
+        el.append(' &nbsp; <span class="ansi-magenta-fg">&lt;<span class="ansi-green-fg">' + pad(data.sector.planets[i].number, 4).replace(' ', '&nbsp;') + '</span>&gt;</span> <span class="ansi-bright-cyan-fg">' + data.sector.planets[i].name + '</span><br />')
+        menuEvents.push({ 'nextFunction': landOnPlanetID, 'nextFunctionArgs': [ data ], 'attribute': 'planet_id', 'id': data.sector.planets[i].id, 'number': data.sector.planets[i].number })
+      }
+      el.append('<br /><span class="ansi-magenta-fg show-number">Land on which planet <span class="ansi-bright-yellow-fg">&lt;Q to abort&gt;</span> ? ')
+    }
+    menuEventHandler(menuEvents)
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  var landOnPlanetID = function (data, id) {
+    $.post('/planet/', { 'task': 'land', 'planet_id': id, 'ship_id': data.ship.id }, function(data) {
+      el.append('<br /><span class="ansi-bright-red-fg ansi-bright-black-bg">Landing sequence engaged...</span><br />')
+      displayPlanet(data)      
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    })
+  }
+
+  var pad = function(str, len) {
+    return str.toString().length < len ? pad(' ' + str, len) : str
+  }
+
+  var displayPlanetTable = function(data) {
+    el.append('<br /><br />Planet <span class="ansi-bright-yellow-fg">#</span><span class="ansi-bright-cyan-fg">' + data.planet.id + '</span> in sector <span class="ansi-bright-yellow-fg">' + data.sector.number + '</span>: <span class="ansi-cyan-fg">' + data.planet.name + '</span><br />')
+    el.append('<span class="ansi-magenta-fg">Class <span class="ansi-bright-white-fg ansi-blue-bg">' + data.planet.type.class + '</span>, ' + data.planet.type.desc + '</span><br />')
+    el.append('<span class="ansi-magenta-fg">Created by:</span> <span class="ansi-bright-cyan-fg">' + (data.planet.created_by ? data.planet.created_by : '&lt;UNKNOWN&gt;') + '</span><br />')
+    el.append('<span class="ansi-magenta-fg">Claimed by:</span> <span class="ansi-bright-yellow-fg">' + (data.planet.trader ? data.planet.trader.name : '<span class="ansi-bright-red-fg">Abandoned</span>' ) + '</span><br /><br />')
+
+    var table = $('<table></table>').addClass('table table-condensed planet')
+    table.append($('<thead></thead>').addClass('ansi-green-fg').html('<tr><td>Item</td><td>Colonists<br />(1000s)</td><td>Colonists<br />2 Build 1</td><td>Daily<br />Product</td><td>Planet<br />Amount</td><td>Ship<br />Amount</td><td>Planet<br />Maximum</td></tr>'));
+    table.append($('<tr></tr>').html('<td class="ansi-green-fg" style="text-align: left">Fuel Ore</td><td class="ansi-bright-yellow-fg">' + addCommas(data.planet.fuel_cols) + '</td><td class="ansi-red-fg">' + addCommas(data.planet.type.col_to_fuel_ratio) + '</td><td class="ansi-bright-blue-fg">' + addCommas(Math.floor(data.planet.fuel_cols / data.planet.type.col_to_fuel_ratio)) + '</td><td class="ansi-bright-cyan-fg">' + addCommas(data.planet.fuel) + '</td><td class="ansi-magenta-fg">' + data.ship.fuel + '</td><td class="ansi-yellow-fg">' + addCommas(data.planet.type.max_units_fuel) + '</td>'))
+    table.append($('<tr></tr>').html('<td class="ansi-green-fg" style="text-align: left">Organics</td><td class="ansi-bright-yellow-fg">' + addCommas(data.planet.organics_cols) + '</td><td class="ansi-red-fg">' + addCommas(data.planet.type.col_to_organics_ratio) + '</td><td class="ansi-bright-blue-fg">' + addCommas(Math.floor(data.planet.organics_cols / data.planet.type.col_to_organics_ratio)) + '</td><td class="ansi-bright-cyan-fg">' + addCommas(data.planet.organics) + '</td><td class="ansi-magenta-fg">' + data.ship.organics + '</td><td class="ansi-yellow-fg">' + addCommas(data.planet.type.max_units_organics) + '</td>'))
+    table.append($('<tr></tr>').html('<td class="ansi-green-fg" style="text-align: left">Equipment</td><td class="ansi-bright-yellow-fg">' + addCommas(data.planet.equipment_cols) + '</td><td class="ansi-red-fg">' + addCommas(data.planet.type.col_to_equipment_ratio) + '</td><td class="ansi-bright-blue-fg">' + addCommas(Math.floor(data.planet.equipment_cols / data.planet.type.col_to_equipment_ratio)) + '</td><td class="ansi-bright-cyan-fg">' + addCommas(data.planet.equipment) + '</td><td class="ansi-magenta-fg">' + data.ship.equipment + '</td><td class="ansi-yellow-fg">' + addCommas(data.planet.type.max_units_equipment) + '</td>'))
+    var figsDaily = Math.floor(((data.planet.fuel_cols / data.planet.type.col_to_fuel_ratio) + (data.planet.organics_cols / data.planet.type.col_to_organics_ratio) + (data.planet.equipment_cols / data.planet.type.col_to_equipment_ratio)) / data.planet.type.col_to_fighter_ratio)
+    var figs2build1 = Math.floor((data.planet.fuel_cols + data.planet.organics_cols + data.planet.equipment_cols) / figsDaily)
+
+    table.append($('<tr></tr>').html('<td class="ansi-green-fg" style="text-align: left">Fighters</td><td class="ansi-bright-yellow-fg">N/A</td><td class="ansi-red-fg">' + (figs2build1 === 0 ? 'N/A' : addCommas(figs2build1)) + '</td><td class="ansi-bright-blue-fg">' + addCommas(figsDaily) + '</td><td class="ansi-bright-cyan-fg">' + addCommas(data.planet.fighters) + '</td><td class="ansi-magenta-fg">' + data.ship.fighters + '</td><td class="ansi-yellow-fg">' + addCommas(data.planet.type.max_fighters) + '</td>'))
+    el.append(table)
+  }
+
+  var displayPlanet = function(data) {
+    displayPlanetTable(data)
+    el.append('You have <span class="ansi-bright-yellow-fg">' + getShipEmptyHolds(data) + '</span> free cargo holds.<br />');
+    displayPlanetCommand(data)
+  }
+
+  var getShipEmptyHolds = function(data) {
+    return (data.ship.holds - data.ship.fuel - data.ship.organics - data.ship.equipment - data.ship.colonists)
+  }
+
+  var displayPlanetCommand = function(data) {
+    el.append(planetPrompt)
+    menuEventHandler([
+      { 'nextFunction': planetTakeAll, 'nextFunctionArgs': [ data ], 'attribute': 'take', 'key': 'A'.charCodeAt(), 'noreset': true },
+      { 'nextFunction': planetEnterCitadel, 'attribute': 'citadel', 'key': 'C'.charCodeAt() },
+      { 'nextFunction': displayPlanet, 'nextFunctionArgs': [ data ], 'attribute': 'display', 'key': 'D'.charCodeAt() },
+      { 'nextFunction': displayPlanet, 'nextFunctionArgs': [ data ], 'attribute': 'display', 'key': 13 },
+      { 'nextFunction': planetChangeMilitary, 'nextFunctionArgs': [ data ], 'attribute': 'military', 'key': 'M'.charCodeAt() },
+      { 'nextFunction': planetChangeOwnership, 'nextFunctionArgs': [ data ], 'attribute': 'claim', 'key': 'O'.charCodeAt() },
+      { 'nextFunction': planetChangePopulation, 'nextFunctionArgs': [ data ], 'attribute': 'population', 'key': 'P'.charCodeAt() },
+      { 'nextFunction': planetChangeColonists, 'nextFunctionArgs': [ data ], 'attribute': 'colonists', 'key': 'S'.charCodeAt() },
+      { 'nextFunction': planetChangeProduct, 'nextFunctionArgs': [ data ], 'attribute': 'product', 'key': 'T'.charCodeAt() },
+      { 'nextFunction': planetDestroy, 'nextFunctionArgs': [ data ], 'attribute': 'destroy', 'key': 'Z'.charCodeAt() },
+      { 'nextFunction': planetLeave, 'nextFunctionArgs': [ data ], 'attribute': 'quit', 'key': 'Q'.charCodeAt() },
+      { 'nextFunction': planetHelp, 'attribute': 'help', 'key': 49, 'noreset': true },
+      { 'nextFunction': planetMenu, 'attribute': 'menu', 'key': 191, 'noreset': true }
+    ])
+  }
+
+  var planetMenu = function() {
+    el.append('<br /><br />')
+    var menu = $('<ul></ul>').addClass('list-unstyled')
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="take">A</a>&gt;</span> <span class="ansi-bright-cyan-fg">Take All Products</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="citadel">C</a>&gt;</span> <span class="ansi-bright-cyan-fg">Enter Citadel</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="display">D</a>&gt;</span> <span class="ansi-bright-cyan-fg">Display Planet</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="military">M</a>&gt;</span> <span class="ansi-bright-cyan-fg">Change Military Levels</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="claim">O</a>&gt;</span> <span class="ansi-bright-cyan-fg">Claim Ownership of this planet</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="population">P</a>&gt;</span> <span class="ansi-bright-cyan-fg">Change Population Lvls</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="colonists">S</a>&gt;</span> <span class="ansi-bright-cyan-fg">Load/Unload Colonists</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="product">T</a>&gt;</span> <span class="ansi-bright-cyan-fg">Take or Leave Product</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="destroy">Z</a>&gt;</span> <span class="ansi-bright-cyan-fg">Try to Destroy Planet</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-bright-yellow-fg" data-attribute="help">!</a>&gt;</span> <span class="ansi-bright-yellow-fg">Planetary Help</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-bright-yellow-fg" data-attribute="quit">Q</a>&gt;</span> <span class="ansi-bright-yellow-fg">Leave this Planet</span>'))
+    el.append(menu)
+    el.append(planetPrompt)
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  var planetTakeAll = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Take all&gt;</span><br />')
+    var holdsFree = parseInt(data.ship.holds) - (parseInt(data.ship.fuel) + parseInt(data.ship.organics) + parseInt(data.ship.equipment) + parseInt(data.ship.colonists))
+    var take = {}
+    if (holdsFree > 0) {
+      if (parseInt(data.planet.equipment) > 0) {
+        if (parseInt(data.planet.equipment) >= holdsFree) {
+          take['equipment'] = holdsFree
+          holdsFree = 0
+        } else {
+          take['equipment'] = parseInt(data.planet.equipment)
+          holdsFree -= take['equipment']
+        }
+      }
+      if (parseInt(data.planet.organics) > 0 && holdsFree > 0) {
+        if (parseInt(data.planet.organics) >= holdsFree) {
+          take['organics'] = holdsFree
+          holdsFree = 0
+        } else {
+          take['organics'] = parseInt(data.planet.organics)
+          holdsFree -= take['organics']
+        }
+      }
+      if (parseInt(data.planet.fuel) > 0 && holdsFree > 0) {
+        if (parseInt(data.planet.fuel) >= holdsFree) {
+          take['fuel'] = holdsFree
+          holdsFree = 0
+        } else {
+          take['fuel'] = parseInt(data.planet.fuel)
+          holdsFree -= take['fuel']
+        }
+      }
+    }
+
+    $.post('/planet/', { 'task': 'takeallproduct', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'take': take }, function(result) {
+      if (result.status == 'ok') {
+        if (take['equipment'] > 0) {
+          data.ship.equipment = add([data.ship.equipment, take['equipment']])
+          data.planet.equipment = sub([data.planet.equipment, take['equipment']])
+          el.append('You took <span class="ansi-bright-yellow-fg">' + take['equipment'] + '</span> holds of equipment.<br />')
+        }
+        if (take['organics'] > 0) {
+          data.ship.organics = add([data.ship.organics, take['organics']])
+          data.planet.organics = sub([data.planet.organics, take['organics']])
+          el.append('You took <span class="ansi-bright-yellow-fg">' + take['organics'] + '</span> holds of organics.<br />')
+        }
+        if (take['fuel'] > 0) {
+          data.ship.fuel = add([data.ship.fuel, take['fuel']])
+          data.planet.fuel = sub([data.planet.fuel, take['fuel']])
+          el.append('You took <span class="ansi-bright-yellow-fg">' + take['fuel'] + '</span> holds of fuel ore.<br />')
+        }
+        if (holdsFree === 0)
+          el.append('<span class="ansi-magenta-fg">Your holds are full.</span><br />')
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      el.append(planetPrompt)
+      window.scrollTo(0, document.body.scrollHeight)
+    })
+  }
+
+  var planetEnterCitadel = function() {
+  }
+
+  var planetChangeProduct = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Take/Leave Products&gt;</span><br /><br />')
+    el.append('<span class="ansi-magenta-fg">Display planet?</span>')
+    booleanKey(function() { displayPlanetTable(data); planetChangeProductTakeLeave(data) }, function() { planetChangeProductTakeLeave(data) }, false)
+  }
+
+  var planetChangeProductTakeLeave = function(data) {
+    el.append('<br /><span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="leave">L</a>)eave or (<a href="" class="ansi-bright-yellow-fg" data-attribute="take">T</a>)ake Product? <span class="ansi-bright-yellow-fg">[T]</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangeProductGroup, 'nextFunctionArgs': [ 'leave', data ], 'attribute': 'leave', 'key': 'L'.charCodeAt() },
+      { 'nextFunction': planetChangeProductGroup, 'nextFunctionArgs': [ 'take', data ], 'attribute': 'take', 'key': 'T'.charCodeAt() },
+      { 'nextFunction': planetChangeProductGroup, 'nextFunctionArgs': [ 'take', data ], 'attribute': 'take', 'key': 13 },
+    ])
+  }
+
+  var planetChangeProductGroup = function(task, data) {
+    el.append('<br />Which product are you taking?<br />')
+    el.append('<span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="fuel">1</a>)Ore, (<a href="" class="ansi-bright-yellow-fg" data-attribute="organics">2</a>)Org or (<a href="" class="ansi-bright-yellow-fg" data-attribute="equipment">3</a>)Equipment ?</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangeProductQuantity, 'nextFunctionArgs': [ task, 'fuel', data ], 'attribute': 'fuel', 'key': '1'.charCodeAt() },
+      { 'nextFunction': planetChangeProductQuantity, 'nextFunctionArgs': [ task, 'organics', data ], 'attribute': 'organics', 'key': '2'.charCodeAt() },
+      { 'nextFunction': planetChangeProductQuantity, 'nextFunctionArgs': [ task, 'equipment', data ], 'attribute': 'equipment', 'key': '3'.charCodeAt() }
+    ])
+  }
+
+  var prettyProduct = function(group) {
+    switch (group) {
+      case 'fuel':
+        return 'Fuel Ore'
+        break
+      case 'organics':
+        return 'Organics'
+        break
+      case 'equipment':
+        return 'Equipment'
+        break
+      default:
+        return group
+    }
+  }
+
+  var planetChangeProductQuantity = function(task, group, data) {
+    var max = 0
+    switch (group) {
+      case 'fuel':
+        max = (task == 'take' ? getShipEmptyHolds(data) : data.ship.fuel)
+        break;
+      case 'organics':
+        max = (task == 'take' ? getShipEmptyHolds(data) : data.ship.organics)
+        break;
+      case 'equipment':
+        max = (task == 'take' ? getShipEmptyHolds(data) : data.ship.equipment)
+        break;
+    }
+    el.append('<form id="planetChangeProduct"><div class="form-group"><label for="quantity"><span class="ansi-magenta-fg">How many holds of ' + prettyProduct(group) + ' do you want to ' + task + ' (<span class="ansi-bright-cyan-fg">[<span class="ansi-bright-yellow-fg">' + max + '</span>]</span> ' + (task == 'take' ? 'empty holds' : 'on board') + ') ? </span></label><input type="text" class="form-control ansi-magenta-fg" name="quantity" id="quantity" placeholder="' + max + '"></div></form>')
+    $('#planetChangeProduct #quantity').focus()
+    $('#planetChangeProduct').validate({
+      rules: {
+        quantity: {
+          required: true,
+          digits: true,
+          min: 0,
+          max: max
+        }
+      },
+      submitHandler: function(form) {
+        var quantity = $('#planetChangeProduct #quantity').val()
+        $.post('/planet/', { 'task': 'changeproduct', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'which': task, 'group': group, 'quantity': quantity }, function(result) {
+          if (result.status == 'ok') {
+            switch (group) {
+              case 'fuel':
+                data.planet.fuel = (task == 'take' ? sub([data.planet.fuel, quantity]) : add([data.planet.fuel, quantity]))
+                data.ship.fuel = (task == 'take' ? add([data.ship.fuel, quantity]) : sub([data.ship.fuel, quantity]))
+                break
+              case 'organics':
+                data.planet.organics = (task == 'take' ? sub([data.planet.organics, quantity]) : add([data.planet.organics, quantity]))
+                data.ship.organics = (task == 'take' ? add([data.ship.organics, quantity]) : sub([data.ship.organics, quantity]))
+                break
+              case 'equipment':
+                data.planet.equipment = (task == 'take' ? sub([data.planet.equipment, quantity]) : add([data.planet.equipment, quantity]))
+                data.ship.equipment = (task == 'take' ? add([data.ship.equipment, quantity]) : sub([data.ship.equipment, quantity]))
+                break
+            }
+            el.append((task == 'take' ? 'You load the ' + prettyProduct(group) + ' aboard your ship.<br />' : 'You unload the ' + prettyProduct(group) + ' from your ship.<br />'))
+          }
+        }).fail(function(result) {
+          if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+            el.append(result.responseJSON.error + '<br />')
+        }).always(function() {
+          $('#planetChangeProduct').replaceWith(' <span class="ansi-magenta-fg">' + quantity + '</span><br />')
+          displayPlanetCommand(data)
+        })
+        return false
+      }
+    })
+  }
+
+  var planetChangeColonists = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Load/Unload Colonists&gt;</span><br /><br />')
+    el.append('<span class="ansi-magenta-fg">Display planet?</span>')
+    booleanKey(function() { displayPlanetTable(data); planetChangeColonistsTakeLeave(data) }, function() { planetChangeColonistsTakeLeave(data) }, false)
+  }
+
+  var planetChangeColonistsTakeLeave = function(data) {
+    el.append('<br /><span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="leave">L</a>)eave or (<a href="" class="ansi-bright-yellow-fg" data-attribute="take">T</a>)ake Colonists? <span class="ansi-bright-yellow-fg">[L]</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangeColonistsGroup, 'nextFunctionArgs': [ 'leave', data ], 'attribute': 'leave', 'key': 'L'.charCodeAt() },
+      { 'nextFunction': planetChangeColonistsGroup, 'nextFunctionArgs': [ 'leave', data ], 'attribute': 'take', 'key': 13 },
+      { 'nextFunction': planetChangeColonistsGroup, 'nextFunctionArgs': [ 'take', data ], 'attribute': 'take', 'key': 'T'.charCodeAt() }
+    ])
+  }
+
+  var planetChangeColonistsGroup = function(task, data) {
+    el.append('<br />Which production group are you changing?<br />')
+    el.append('<span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="fuel">1</a>)Ore, (<a href="" class="ansi-bright-yellow-fg" data-attribute="organics">2</a>)Org or (<a href="" class="ansi-bright-yellow-fg" data-attribute="equipment">3</a>)Equipment Production?</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangeColonistsQuantity, 'nextFunctionArgs': [ task, 'fuel', data ], 'attribute': 'fuel', 'key': '1'.charCodeAt() },
+      { 'nextFunction': planetChangeColonistsQuantity, 'nextFunctionArgs': [ task, 'organics', data ], 'attribute': 'organics', 'key': '2'.charCodeAt() },
+      { 'nextFunction': planetChangeColonistsQuantity, 'nextFunctionArgs': [ task, 'equipment', data ], 'attribute': 'equipment', 'key': '3'.charCodeAt() }
+    ])
+  }
+
+  var planetChangeColonistsQuantity = function(task, group, data) {
+    var max = (task == 'take' ? getShipEmptyHolds(data) : data.ship.colonists)
+    el.append('<form id="planetChangeColonists"><div class="form-group"><label for="quantity"><span class="ansi-magenta-fg">How many groups of Colonists do you want to ' + task + ' (<span class="ansi-bright-cyan-fg">[<span class="ansi-bright-yellow-fg">' + max + '</span>]</span> ' + (task == 'take' ? 'empty holds' : 'on board') + ') ? </span></label><input type="text" class="form-control ansi-magenta-fg" name="quantity" id="quantity" placeholder="' + max + '"></div></form>')
+    $('#planetChangeColonists #quantity').focus()
+    $('#planetChangeColonists').validate({
+      rules: {
+        quantity: {
+          required: true,
+          digits: true,
+          min: 0,
+          max: max
+        }
+      },
+      submitHandler: function(form) {
+        var quantity = $('#planetChangeColonists #quantity').val()
+        $.post('/planet/', { 'task': 'changecolonists', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'which': task, 'group': group, 'quantity': quantity }, function(result) {
+          if (result.status == 'ok') {
+            data.ship.colonists = (task == 'take' ? add([data.ship.colonists, quantity]) : sub([data.ship.colonists, quantity]))
+            switch (group) {
+              case 'fuel':
+                data.planet.fuel_cols = (task == 'take' ? sub([data.planet.fuel_cols, quantity]) : add([data.planet.fuel_cols, quantity]))
+                break
+              case 'organics':
+                data.planet.organics_cols = (task == 'take' ? sub([data.planet.organics_cols, quantity]) : add([data.planet.organics_cols, quantity]))
+                break
+              case 'equipment':
+                data.planet.equipment_cols = (task == 'take' ? sub([data.planet.equipment_cols, quantity]) : add([data.planet.equipment_cols, quantity]))
+                break
+            }
+            el.append((task == 'take' ? 'The Colonists file aboard your ship, eager to head out.<br />' : 'The Colonists disembark to begin their new life.<br />'))
+          }
+        }).fail(function(result) {
+          if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+            el.append(result.responseJSON.error + '<br />')
+        }).always(function() {
+          $('#planetChangeColonists').replaceWith(' <span class="ansi-magenta-fg">' + quantity + '</span><br />')
+          displayPlanetCommand(data)
+        })
+        return false
+      }
+    })
+  }
+
+  var planetChangeMilitary = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Change Military&gt;</span><br /><br />')
+    el.append('<span class="ansi-magenta-fg">Display planet?</span>')
+    booleanKey(function() { displayPlanetTable(data); planetChangeMilitaryTakeLeaveFighters(data) }, function() { planetChangeMilitaryTakeLeaveFighters(data) }, false)
+  }
+
+  var planetChangeMilitaryTakeLeaveFighters = function (data) {
+    el.append('<br /><span class="ansi-yellow-fg">There are currently <span class="ansi-bright-yellow-fg">' + data.planet.fighters + '</span> Fighters on this planet.<br />')
+    el.append('<span class="ansi-magenta-fg">Do you wish to (<a href="" class="ansi-bright-yellow-fg" data-attribute="leave">L</a>)eave or (<a href="" class="ansi-bright-yellow-fg" data-attribute="take">T</a>)ake Fighters? <span class="ansi-bright-yellow-fg">[T] (Q to Exit)</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangeMilitaryLeaveFighters, 'nextFunctionArgs': [ data ], 'attribute': 'leave', 'key': 'L'.charCodeAt() },
+      { 'nextFunction': planetChangeMilitaryTakeFighters, 'nextFunctionArgs': [ data ], 'attribute': 'take', 'key': 'T'.charCodeAt() },
+      { 'nextFunction': planetChangeMilitaryTakeFighters, 'nextFunctionArgs': [ data ], 'attribute': 'take', 'key': 13 },
+      { 'nextFunction': displayPlanetCommand, 'nextFunctionArgs': [ data ], 'attribute': 'quit', 'key': 'Q'.charCodeAt() }
+    ])
+  }
+
+  var planetChangeMilitaryLeaveFighters = function(data) {
+    el.append('<form id="planetChangeMilitaryLeaveFighters"><div class="form-group"><label for="quantity"><span class="ansi-magenta-fg">How many Fighters do you want to leave <span class="ansi-bright-yellow-fg">(' + data.ship.fighters + ' on board)</span> ?</span></label><input type="text" class="form-control ansi-magenta-fg" name="quantity" id="quantity" placeholder="' + data.ship.fighters + '"></div></form>')
+    $('#planetChangeMilitaryLeaveFighters #quantity').focus()
+    $('#planetChangeMilitaryLeaveFighters').validate({
+      rules: {
+        quantity: {
+          required: true,
+          digits: true,
+          min: 0,
+          max: (data.planet.type.max_fighters >= data.ship.fighters ? data.ship.fighters : data.planet.type.max_fighters)
+        }
+      },
+      submitHandler: function(form) {
+        var quantity = $('#planetChangeMilitaryLeaveFighters #quantity').val()
+        $.post('/planet/', { 'task': 'leavefighters', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'quantity': quantity }, function(result) {
+          if (result.status == 'ok') {
+            data.ship.fighters = sub([data.ship.fighters, quantity])
+            data.planet.fighters = add([data.planet.fighters, quantity])
+            el.append('Done!<br />')
+          }
+        }).fail(function(result) {
+          if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+            el.append(result.responseJSON.error + '<br />')
+        }).always(function() {
+          $('#planetChangeMilitaryLeaveFighters').replaceWith(' <span class="ansi-magenta-fg">' + quantity + '</span><br />')
+          displayPlanetCommand(data)
+        })
+        return false
+      }
+    })
+  }
+
+  var planetChangeMilitaryTakeFighters = function(data) {
+    el.append('<form id="planetChangeMilitaryTakeFighters"><div class="form-group"><label for="quantity"><span class="ansi-magenta-fg">How many Fighters do you want to take <span class="ansi-bright-yellow-fg">(' + data.planet.fighters + ' Max)</span> ?</span></label><input type="text" class="form-control ansi-magenta-fg" name="quantity" id="quantity" placeholder="' + data.planet.fighters + '"></div></form>')
+    $('#planetChangeMilitaryTakeFighters #quantity').focus()
+    $('#planetChangeMilitaryTakeFighters').validate({
+      rules: {
+        quantity: {
+          required: true,
+          digits: true,
+          min: 0,
+          max: (data.ship.type.max_fighters >= data.planet.fighters ? data.planet.fighters : data.ship.type.max_fighters)
+        }
+      },
+      submitHandler: function(form) {
+        var quantity = $('#planetChangeMilitaryTakeFighters #quantity').val()
+        $.post('/planet/', { 'task': 'takefighters', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'quantity': quantity }, function(result) {
+          if (result.status == 'ok') {
+            data.ship.fighters = add([data.ship.fighters, quantity])
+            data.planet.fighters = sub([data.planet.fighters, quantity])
+            el.append('The Fighters join your battle force.<br />')
+          }
+        }).fail(function(result) {
+          if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+            el.append(result.responseJSON.error + '<br />')
+        }).always(function() {
+          $('#planetChangeMilitaryTakeFighters').replaceWith(' <span class="ansi-magenta-fg">' + quantity + '</span><br />')
+          displayPlanetCommand(data)
+        })
+        return false
+      }
+    })
+  }
+
+  var add = function(n) {
+    return parseInt(n[0]) + parseInt(n[1])
+  }
+
+  var sub = function(n) {
+    return parseInt(n[0]) - parseInt(n[1])
+  }
+
+  var planetChangeOwnership = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Claim Ownership of this Planet&gt;</span><br />')
+    $.post('/planet/', { 'task': 'claimownership', 'planet_id': data.planet.id, 'ship_id': data.ship.id }, function(result) {
+      if (result.status == 'ok') {
+        el.append('<br />Done!<br />')
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      getSectorData(displayPlanetCommand)
+    })
+  }
+
+  var planetChangePopulation = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Change Colonist Population&gt;</span><br /><br />')
+    el.append('<span class="ansi-magenta-fg">Display planet?</span>')
+    booleanKey(function() { displayPlanetTable(data); planetChangePopulationFrom(data) }, function() { planetChangePopulationFrom(data) }, false)
+  }
+
+  var planetChangePopulationFrom = function(data) {
+    el.append('<br />Which production group are you moving Colonists from?<br />')
+    el.append('<span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="fuel">1</a>)Ore, (<a href="" class="ansi-bright-yellow-fg" data-attribute="organics">2</a>)Org or (<a href="" class="ansi-bright-yellow-fg" data-attribute="equipment">3</a>)Equipment?</span>')
+    menuEventHandler([
+      { 'nextFunction': planetChangePopulationFromType, 'nextFunctionArgs': [ 'fuel', data ], 'attribute': 'fuel', 'key': '1'.charCodeAt() },
+      { 'nextFunction': planetChangePopulationFromType, 'nextFunctionArgs': [ 'organics', data ], 'attribute': 'organics', 'key': '2'.charCodeAt() },
+      { 'nextFunction': planetChangePopulationFromType, 'nextFunctionArgs': [ 'equipment', data ], 'attribute': 'equipment', 'key': '3'.charCodeAt() }
+    ])
+  }
+
+  var planetChangePopulationFromType = function(from, data) {
+    el.append('<form id="planetChangePopulationFrom"><div class="form-group"><label for="quantity"><span class="ansi-magenta-fg">How many groups of Colonists do you want to move?</span></label><input type="text" class="form-control ansi-magenta-fg" name="quantity" id="quantity"></div></form>')
+    $('#planetChangePopulationFrom #quantity').focus()
+    var maxColonists = 0
+    switch (from) {
+      case 'fuel':
+        maxColonists = data.planet.fuel_cols
+        break
+      case 'organics':
+        maxColonists = data.planet.organics_cols
+        break
+      case 'equipment':
+        maxColonists = data.planet.equipment_cols
+        break
+      default:
+        maxColonists = 0
+    }
+    $('#planetChangePopulationFrom').validate({
+      rules: {
+        quantity: {
+          required: true,
+          digits: true,
+          min: 0,
+          max: maxColonists
+        }
+      },
+      submitHandler: function(form) {
+        var quantity = $('#planetChangePopulationFrom #quantity').val()
+        el.append('<br />And which group are you moving them to?<br />')
+        el.append('<span class="ansi-magenta-fg">(<a href="" class="ansi-bright-yellow-fg" data-attribute="fuel">1</a>)Ore, (<a href="" class="ansi-bright-yellow-fg" data-attribute="organics">2</a>)Org or (<a href="" class="ansi-bright-yellow-fg" data-attribute="equipment">3</a>)Equipment?</span>')
+        menuEventHandler([
+          { 'nextFunction': planetChangePopulationToType, 'nextFunctionArgs': [ from, 'fuel', quantity, data ], 'attribute': 'fuel', 'key': '1'.charCodeAt() },
+          { 'nextFunction': planetChangePopulationToType, 'nextFunctionArgs': [ from, 'organics', quantity, data ], 'attribute': 'organics', 'key': '2'.charCodeAt() },
+          { 'nextFunction': planetChangePopulationToType, 'nextFunctionArgs': [ from, 'equipment', quantity, data ], 'attribute': 'equipment', 'key': '3'.charCodeAt() }
+        ])
+        $('#planetChangePopulationFrom').replaceWith(' <span class="ansi-magenta-fg">' + quantity + '</span><br />')
+        return false
+      }
+    })
+  }
+
+  var planetChangePopulationToType = function(from, to, quantity, data) {
+    $.post('/planet/', { 'task': 'changepopulation', 'planet_id': data.planet.id, 'ship_id': data.ship.id, 'from': from, 'to': to, 'quantity': quantity }, function(result) {
+      if (result.status == 'ok') {
+        switch (from) {
+          case 'fuel':
+            data.planet.fuel_cols = sub([data.planet.fuel_cols, quantity])
+            break
+          case 'organics':
+            data.planet.organics_cols = sub([data.planet.organics_cols, quantity])
+            break
+          case 'equipment':
+            data.planet.equipment_cols = sub([data.planet.equipment_cols, quantity])
+            break
+        }
+        switch (to) {
+          case 'fuel':
+            data.planet.fuel_cols = add([data.planet.fuel_cols, quantity])
+            break
+          case 'organics':
+            data.planet.organics_cols = add([data.planet.organics_cols, quantity])
+            break
+          case 'equipment':
+            data.planet.equipment_cols = add([data.planet.equipment_cols, quantity])
+            break
+        }
+        el.append('<br />The Colonists drop what they were doing and start their new jobs.<br />')
+      }
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      displayPlanetCommand(data)
+    })
+  }
+
+  var planetDestroy = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Destroy Planet&gt;</span><br /><br />')
+    planetDestroyMenu(data)
+  }
+
+  var planetDestroyMenu = function(data) {
+
+    menuEventHandler([
+      { 'nextFunction': planetDestroyDetonate, 'nextFunctionArgs': [ data ], 'attribute': 'detonate', 'key': 'D'.charCodeAt() },
+      { 'nextFunction': planetDestroyAttack, 'nextFunctionArgs': [ data ], 'attribute': 'attack', 'key': 'A'.charCodeAt() },
+      { 'nextFunction': planetDestroyHelp, 'nextFunctionArgs': [ data ], 'attribute': 'help', 'key': 'Z'.charCodeAt() },
+      { 'nextFunction': displayPlanetCommand, 'nextFunctionArgs': [ data ], 'attribute': 'quit', 'key': 'Q'.charCodeAt() },
+      { 'nextFunction': displayPlanetCommand, 'nextFunctionArgs': [ data ], 'attribute': 'quit', 'key': 13 }
+    ])    
+
+    var menu = $('<ul></ul>').addClass('list-unstyled')
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="detonate">D</a>&gt;</span> <span class="ansi-bright-cyan-fg">Use Atomic Detonators</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="attack">A</a>&gt;</span> <span class="ansi-bright-cyan-fg">Attack Colonists</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="help">Z</a>&gt;</span> <span class="ansi-bright-cyan-fg">Help! (What do I do?)</span>'))
+    menu.append($('<li></li>').html('<span class="ansi-magenta-fg">&lt;<a href="" class="ansi-green-fg" data-attribute="quit">Q</a>&gt;</span> <span class="ansi-bright-red-fg ansi-bright-black-bg">Never Mind</span>'))
+    el.append(menu)
+    el.append(planetDestroyPrompt)
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  var planetDestroyHelp = function(data) {
+    el.append('<br /><br />You may either set the Atomic Detonators and hope that the Colonists do not<br />"accidently" set them off trying to disarm them (while you\'re on the planet)<br />or you can first attack and exterminate the Colonist population to assure a<br />safer use of the detonators.<br /><br />')
+    planetDestroyMenu(data)
+  }
+
+  var planetDestroyDetonate = function(data) {
+    el.append('<br /><span class="ansi-bright-white-fg ansi-blue-bg">&lt;Set Atomic Detonators&gt;</span><br /><br />')
+    el.append('<span class="ansi-bright-red-fg ansi-bright-black-bg">&lt;DANGER&gt;</span> Are you sure you want to do this?')
+    booleanKey(function() { planetDestroyDetonateConfirm(data) }, function() { planetDestroyMenu(data) }, false)
+  }
+
+  var planetDestroyDetonateConfirm = function(data) {
+    if (data.ship.detonators === 0) {
+      el.append('<br />You do not have any Atomic Detonators!<br /><br />')
+      planetDestroyMenu(data)
+    } else {
+      var figsDaily = Math.floor(((data.planet.fuel_cols / data.planet.type.col_to_fuel_ratio) + (data.planet.organics_cols / data.planet.type.col_to_organics_ratio) + (data.planet.equipment_cols / data.planet.type.col_to_equipment_ratio)) / data.planet.type.col_to_fighter_ratio)
+
+      $.post('/planet/', { 'task': 'destroy', 'planet_id': data.planet.id, 'ship_id': data.ship.id }, function(result) {
+        if (result.status == 'ok') {
+          if (figsDaily > 300) {
+            var controller = AnsiLove.animate('/ANSI/PLTBLAL.ANS', function(canvas, sauce) {
+              el.html(canvas)
+              controller.play(14400, function() { })
+              ownShipDestroyed(result.experience, result.alignment, data)
+            }, { 'bits': 9, '2x': (retina ? 1 : 0) })
+          } else {
+            var controller = AnsiLove.animate('/ANSI/PLTBLUP.ANS', function(canvas, sauce) {
+              el.html(canvas)
+              controller.play(14400, function() { })
+              el.append('<br />For blowing up this planet you receive <span class="ansi-bright-yellow-fg">' + result.experience + '</span> experience point(s).<br />')
+              el.append('and your alignment went ' + (parseInt(result.alignment) > 0 ? 'up' : 'down') + ' by <span class="ansi-bright-yellow-fg">' + result.alignment + '</span> point(s).<br /><br />')
+              getSectorData(displayCurrentSector)
+            }, { 'bits': 9, '2x': (retina ? 1 : 0) })
+          }
+        }
+      }).fail(function(result) {
+        if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+          el.append(result.responseJSON.error + '<br />')
+      })
+    }
+  }
+
+  var ownShipDestroyed = function(experience, alignment, data) {
+    el.append('<br /><span class="ansi-bright-cyan-fg">Your ' + data.ship.type.class + ' has been destroyed!<br /><br />')
+    if (data.ship.type.has_escapepod && data.trader.deaths_since_extern < 3) {
+      el.append('Your trusty Escape Pod is functioning normally.<br />For getting blown up you LOSE <span class="ansi-bright-yellow-fg">' + experience + '</span> experience point(s).<br />Sector <span class="ansi-bright-yellow-fg">' + data.sector.number + '</span> will now be avoided in future navigation calculations.<br /><br />')
+      getSectorData(displayCurrentSector)
+    } else {
+      el.append('You will have to start over from scratch!<br />Maybe you\'ll have better luck with a different ship!<br /><br />')
+      showMainMenu()
+    }
+  }
+
+  var planetDestroyAttack = function(data) {
+  }
+
+  var planetLeave = function(data) {
+    window.scrollTo(0, document.body.scrollHeight)
+    $.post('/planet/', { 'task': 'leave', 'planet_id': data.planet.id, 'ship_id': data.ship.id }, function(result) {
+      el.append('<br />Blasting off from <span class="ansi-bright-cyan-fg">' + data.planet.name + '</span><br />')
+      if (result.status == 'ok')
+        getSectorData(displaySectorCommand)
+    }).fail(function(response) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    })
+  }
+
+  var planetHelp = function() {
+    window.scrollTo(0, 0)
+    el.html('<span class="ansi-bright-white-fg ansi-blue-bg">&lt;PLANET MENU&gt;</span>')
+    el.append(atob('PGJyIC8+PGJyIC8+Jmx0O0EmZ3Q7ICBUYWtlIEFsbCBQcm9kdWN0cy4gIFRoaXMgd2lsbCBsb2FkIHlvdXIgZW1wdHkgaG9sZHMgd2l0aA0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgdGhlIHByb2R1Y3RzIGF2YWlsYWJsZSBvbiB0aGUgcGxhbmV0LiAgVGhlIGRvY2sgd29ya2Vycw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgd2lsbCBsb2FkIHlvdXIgc2hpcCB0byB0aGUgYnJpbSB3aXRoIGFzIG11Y2ggb2YgZWFjaCBvZg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgdGhlIHByb2R1Y3RzIHRoYXQgaXMgYXZhaWxhYmxlIGJlZ2lubmluZyB3aXRoIHRoZSBjYXJnbw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgb2YgZ3JlYXRlc3QgdmFsdWUgKEVxdWlwbWVudCkgdG8gdGhlIGxlYXN0IHZhbHVlIChGdWVsDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBPcmUpLg0KDQo8YnIgLz48YnIgLz4mbHQ7QyZndDsgIEVudGVyIENpdGFkZWwuICBZb3UgZW50ZXIgdGhlIENpdGFkZWwgKGFuZCBkaXNwbGF5IHRoZQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgQ2l0YWRlbCBNZW51KS4gIElmIHRoZXJlIGlzIG5vIGNpdGFkZWwgb24gdGhpcyBwbGFuZXQsDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyB5b3Ugd2lsbCBoYXZlIHRoZSBvcHRpb24gdG8gYnVpbGQgb25lLiAgVGhlIG5lY2Vzc2FyeQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgcHJvZHVjdHMgYW5kIGxhYm9yIGZvcmNlIG5lZWRlZCBpbiB0aGUgY29uc3RydWN0aW9uIHdpbGwNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGRpc3BsYXkuICBZb3Ugd2lsbCBub3QgYmUgaXNzdWVkIGEgYnVpbGRpbmcgcGVybWl0IGlmIHlvdQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgZG9uJ3QgaGF2ZSB0aGUgbmVjZXNzYXJ5IHBlb3BsZSBhbmQgY29tbW9kaXRpZXMuDQoNCjxiciAvPjxiciAvPiZsdDtEJmd0OyAgRGlzcGxheSBQbGFuZXQuICBUaGlzIHdpbGwgc2hvdyB0aGUgcGxhbmV0IG51bWJlciwgdHlwZSwNCjxiciAvPiAmbmJzcDsgJm5ic3A7IG5hbWUgYW5kIHRoZSBhbGlhcyBvZiB0aGUgcGxheWVyIHdobyBjcmVhdGVkIGl0LiAgVGhlcmUNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGlzIGFsc28gYW4gaW5mb3JtYXRpdmUgY2hhcnQgc2hvd2luZyBob3cgbWFueSBjb2xvbmlzdHMNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGFyZSB3b3JraW5nIGluIGVhY2ggcHJvZHVjdGlvbiBhcmVhLCBob3cgbWFueSB1bml0cyBvZg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgZWFjaCBwcm9kdWN0IGFyZSBiZWluZyBwcm9kdWNlZCBkYWlseSwgdGhlIHF1YW50aXR5IG9mDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBtYW55IG9mIGVhY2ggeW91IGhhdmUgb24geW91ciBzaGlwLiAgQ2l0YWRlbCBpbmZvcm1hdGlvbg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgaW5jbHVkaW5nIGxldmVsLCBjb25zdHJ1Y3Rpb24gdW5kZXJ3YXkgYW5kIGNyZWRpdHMgaW4gdGhlDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyB2YXVsdCBpcyBhbHNvIGF2YWlsYWJsZS4NCg0KPGJyIC8+PGJyIC8+Jmx0O00mZ3Q7ICBDaGFuZ2UgTWlsaXRhcnkgTGV2ZWxzLiAgWW91IHdpbGwgd2FudCB0byBtb3ZlIHlvdXINCjxiciAvPiAmbmJzcDsgJm5ic3A7IGZpZ2h0ZXJzIGFyb3VuZCB0byBwcm90ZWN0IHlvdXIgdGVycml0b3J5LiAgVGhpcyBvcHRpb24NCjxiciAvPiAmbmJzcDsgJm5ic3A7IHdpbGwgYWxsb3cgeW91IHRvIHRha2UgZmlnaHRlcnMgY3VycmVudGx5IG9uIHRoZSBwbGFuZXQNCjxiciAvPiAmbmJzcDsgJm5ic3A7IG9yIHRvIGxlYXZlIGZpZ2h0ZXJzIHlvdSBoYXZlIGVzY29ydGluZyB5b3UuICBUaGUNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGZpZ2h0ZXJzIG9uIHRoZSBwbGFuZXQgYXJlIGNvbnRyb2xsZWQgYnkgdGhlIENvbWJhdA0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgQ29udHJvbCBDb21wdXRlciAobGV2ZWwgMikgaW4gdGhlIENpdGFkZWwuICBJZiB0aGVyZSBpcw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgbm8gQ29tYmF0IENvbnRyb2wgQ29tcHV0ZXIgdGhlcmUsIHRoZSBmaWdodGVycyB3b3VsZA0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgYmV0dGVyIHNlcnZlIHlvdSBwYXRyb2xsaW5nIHRoZSBzZWN0b3Igb3V0c2lkZSB0aGUNCjxiciAvPiAmbmJzcDsgJm5ic3A7IHBsYW5ldC4gIExlYXZpbmcgZmlnaHRlcnMgb24gYSBwbGFuZXQgd2lsbCBkZXNpZ25hdGUgdGhlDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBwbGFuZXQgYXMgeW91cnMuDQoNCjxiciAvPjxiciAvPiZsdDtPJmd0OyAgQ2xhaW0gT3duZXJzaGlwLiAgTGV0IHRoZSBlbnRpcmUgdW5pdmVyc2Uga25vdyB3aG8NCjxiciAvPiAmbmJzcDsgJm5ic3A7IGNvbnRyb2xzIHRoZSBwbGFuZXQuICBVc2UgdGhpcyBvcHRpb24gdG8gc2V0IHRoZSBwbGFuZXQNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGFzIGVpdGhlciBQZXJzb25hbCBvciBDb3Jwb3JhdGUuICBUaGlzIGlzIGEgbXVzdCB3aGVuDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyB5b3UndmUgZ29uZSB0byBhbGwgdGhlIHRyb3VibGUgdG8gY2FwdHVyZSBvbmUgb2YgeW91cg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgb3Bwb25lbnQncyBwbGFuZXRzLg0KDQo8YnIgLz48YnIgLz4mbHQ7UCZndDsgIENoYW5nZSBQb3B1bGF0aW9uIExldmVscy4gIFRocm91Z2hvdXQgdGhlIGNvdXJzZSBvZiB0aGUNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGdhbWUgeW91IG1heSB3aXNoIHRvIGNoYW5nZSB0aGUgZGlzdHJpYnV0aW9uIG9mIHlvdXINCjxiciAvPiAmbmJzcDsgJm5ic3A7IHdvcmtmb3JjZSBhbW9uZyB0aGUgY29tbW9kaXRpZXMuICBUaGlzIHNlbGVjdGlvbiBwcm92aWRlcw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgeW91IHdpdGggYW4gZWFzeSwgZWZmaWNpZW50IHdheSB0byBvcmRlciB5b3VyIHdvcmtlcnMgdG8NCjxiciAvPiAmbmJzcDsgJm5ic3A7IHRoZSBqb2IgeW91IG5lZWQgZG9uZS4NCg0KPGJyIC8+PGJyIC8+Jmx0O1MmZ3Q7ICBMb2FkL1VubG9hZCBDb2xvbmlzdHMuICBDb2xvbml6aW5nIHlvdXIgcGxhbmV0cyBjYW4NCjxiciAvPiAmbmJzcDsgJm5ic3A7IGNvbnRyaWJ1dGUgZ3JlYXRseSB0byB5b3VyIHRyYWRpbmcgcHJvZml0cy4gIFRoaXMgd2lsbA0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgZW5hYmxlIHlvdSB0byBsZWF2ZSB0aGUgY29sb25pc3RzIHlvdSd2ZSBicm91Z2h0IGZyb20NCjxiciAvPiAmbmJzcDsgJm5ic3A7IFRlcnJhIG9yIHBhY2sgZXZlcnlvbmUgdXAgYW5kIG1vdmUgdGhlbSB0byBhbm90aGVyDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBwbGFuZXQuICBLZWVwIGEgY2xvc2Ugd2F0Y2ggb24geW91ciBwbGFuZXQncyBwb3B1bGF0aW9uDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBiZWNhdXNlIG1hbnkgcGxhbmV0cyBleHBlcmllbmNlIGEgZ3Jvd3RoL2RlYXRoIGN5Y2xlLiAgSWYNCjxiciAvPiAmbmJzcDsgJm5ic3A7IHlvdXIgcGxhbmV0IGhhcyB0b28gbWFueSBwZW9wbGUgdG8gc3VwcG9ydCwgdGhlIHJhdw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgbWF0ZXJpYWxzIG5lZWRlZCB0byBwcm9kdWNlIHlvdXIgY29tbW9kaXRpZXMgd2lsbCBiZSB1c2VkDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyB1cCBieSB0aGUgc3VycGx1cyBwb3B1bGF0aW9uIGFuZCB5b3VyIHByb2R1Y3Rpb24gcmF0ZXMNCjxiciAvPiAmbmJzcDsgJm5ic3A7IHdpbGwgYmUgYWR2ZXJzZWx5IGFmZmVjdGVkLg0KDQo8YnIgLz48YnIgLz4mbHQ7VCZndDsgIFRha2Ugb3IgTGVhdmUgUHJvZHVjdC4gIFRoaXMgd2lsbCBsZXQgeW91IHNwZWNpZnkgdG8gdGhlDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBkb2NrIHdvcmtlcnMgd2hpY2ggdHlwZSBvZiBwcm9kdWN0cyB5b3Ugd2FudCB0byBsZWF2ZSBhbmQNCjxiciAvPiAmbmJzcDsgJm5ic3A7IHdoaWNoIG9uZXMgeW91IHdhbnQgbG9hZGVkIG9uIHlvdXIgc2hpcC4NCg0KPGJyIC8+PGJyIC8+Jmx0O1omZ3Q7ICBUcnkgdG8gRGVzdHJveSBQbGFuZXQuICBGaXJzdCB5b3UgcHVyY2hhc2UgQXRvbWljDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBEZXRvbmF0b3JzIGZyb20gdGhlIEhhcmR3YXJlIEVtcG9yaXVtLiAgVGhhdCBpcyB0aGUgZWFzeQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgcGFydC4gIFlvdSB0aGVuIGhhdmUgdG8gZmlnaHQgeW91ciB3YXkgaW50byB0aGUgc2VjdG9yDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBjb250YWluaW5nIHRoZSBwbGFuZXQuICBBZnRlciBiYXR0bGluZyB0aGUgZmlnaHRlcnMsDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBRdWFzYXIgQ2Fubm9ucywgYW5kIGFueSBvdGhlciBtaWxpdGFyeSBkZWZlbnNlcyB0aGF0IG1heQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgYmUgdGhlcmUsIHlvdSBoYXZlIHRoZSBhYmlsaXR5IHRvIGxheSB5b3VyIEF0b21pYw0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgRGV0b25hdG9ycy4gIENvbG9uaXN0cyBoYXZlIGJlZW4gdHJhaW5lZCBpbiB0aGUgZGlzYXJtaW5nDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBvZiBkZXRvbmF0b3JzLiAgTW9zdCBvZiB0aGUgdHJhaW5pbmcgd2FzIHJ1c2hlZCBhbmQNCjxiciAvPiAmbmJzcDsgJm5ic3A7IHByb3ZpZGVkIGJ5IGluZXhwZXJpZW5jZWQgdGVhY2hlcnMsIHNvIHRoZXkgYXJlbid0IHZlcnkNCjxiciAvPiAmbmJzcDsgJm5ic3A7IGdvb2QgYXQgaXQuICBNb3N0IG9mIHRoZWlyIGF0dGVtcHRzIGxpdGVyYWxseSBnbyB1cCBpbg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgc21va2UsIGFuZCBpZiB5b3UgYXJlIHN0aWxsIG9uIHRoZSBwbGFuZXQgd2hlbiB0aGVpcg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgYXR0ZW1wdCBnb2VzIGF3cnksIHlvdSBnbyBhd3J5IHdpdGggaXQuICBZb3UgaGF2ZSB0aGUNCjxiciAvPiAmbmJzcDsgJm5ic3A7IG9wdGlvbiBvZiBzdWluZyB5b3VyIGNvbnZlbnRpb25hbCB3ZWFwb25zIHRvIGtpbGwgb2ZmIHRoZQ0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgY29sb25pc3RzIGJlZm9yZSB5b3UgbGF5IHRoZSBkZXRvbmF0b3JzIHNvIHlvdSBkb24ndCBydW4NCjxiciAvPiAmbmJzcDsgJm5ic3A7IHRoZSByaXNrIG9mIGdldHRpbmcga2lsbGVkIGJ5IHRoZWlyIGxhY2sgb2Ygc2tpbGwuICBJZg0KPGJyIC8+ICZuYnNwOyAmbmJzcDsgeW91J3JlIHdpbGxpbmcgdG8gcmlzayB0aGUgYmFkIEthcm1hIHRvIGJlIGEgbGl0dGxlDQo8YnIgLz4gJm5ic3A7ICZuYnNwOyBzYWZlciwgdGhpcyBtaWdodCBiZSB0aGUgY29ycmVjdCBvcHRpb24gZm9yIHlvdS4NCg0KPGJyIC8+PGJyIC8+Jmx0O1EmZ3Q7ICBMZWF2ZSBUaGlzIFBsYW5ldC4gIFRha2Ugb2ZmIGZyb20gdGhlIHBsYW5ldC4NCg0KPGJyIC8+PGJyIC8+Jmx0OyEmZ3Q7ICBQbGFuZXRhcnkgSGVscC4gIERpc3BsYXkgdGhlIHBvcnRpb24gb2YgdGhlIGRvY3VtZW50YXRpb24NCjxiciAvPiAmbmJzcDsgJm5ic3A7IGRlc2NyaWJpbmcgdGhlIFBsYW5ldGFyeSBmdW5jdGlvbnMu') + '<br />')
+    el.append(planetPrompt)
+  }
+
+  var formatWarpsList = function(warps) {
+    var warpString = ''
+    for (var i in warps) {
+      warpString += '<a href="" class="ansi-bright-cyan-fg" data-attribute="move" data-id="' + warps[i].number + '">' + warps[i].number + '</a>'
+      if (i < warps.length - 1)
+        warpString += ' <span class="ansi-green-fg">-</span> '
+    }
+    return warpString      
+  }
+
+  var showHelp = function(nextFunction) {
+    $.get('/help/', function(result) {
+      el.append(result.replace(/\n/g, '<br />'))
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      pressAnyKey(nextFunction)
+    })
+  }
+
+  var showScoresByValue = function(nextFunction) {
+    $.get('/score/', function(result) {
+      var table = $('<table></table>').addClass('table table-condensed scores')
+      table.append($('<thead></thead>').addClass('ansi-magenta-fg').html('<tr><td>#</td><td style="text-align: right">Rank</td><td style="text-align: right">Alignment</td><td>Corp</td><td>Trader Name</td><td>Ship type</td></tr>'));
+      for (var i in result)
+        table.append($('<tr></tr>').html('<td>' + (result[i].rank === 1 ? '<span class="ansi-bright-white-fg ansi-blue-bg">&nbsp;' + result[i].rank + '&nbsp;</span>' : result[i].rank ) + '</td><td>' + addCommas(result[i].experience) + '</td><td>' + addCommas(result[i].alignment) + '</td><td>' + (result[i].corp ? result[i].corp : '<span class="ansi-bright-blue-fg">**</span>') + '</td><td class="ansi-bright-cyan-fg" style="text-align: left">' + result[i].name + '</td><td style="text-align: left">' + result[i].ship_type + '</td>'))
+      el.html('<span class="ansi-bright-cyan-fg">Trade Wars 2015 Trader Rankings : </span><span class="ansi-yellow-fg">' + getStarDate() + '</span>')
+      el.append(table)
+    }).fail(function(result) {
+      if (typeof result.responseJSON !== 'undefined' && typeof result.responseJSON.error !== 'undefined')
+        el.append(result.responseJSON.error + '<br />')
+    }).always(function() {
+      pressAnyKey(nextFunction)
+    })
+  }
+
+  var getLogDate = function(dateTime) {
+    var date = new Date(dateTime)
+    return $.format.date(date.setFullYear(date.getFullYear() + 28), '<span class="ansi-red-fg">--</span> <span class="ansi-magenta-fg">MM/dd/yy</span> <span class="ansi-red-fg">--</span> <span class="ansi-magenta-fg">hh:mm:ss a</span> <span class="ansi-red-fg">--</span><br />')
+  }
+
+  var getStarDate = function() {
+    var date = new Date()
+    return $.format.date(date.setFullYear(date.getFullYear() + 28), 'MM/dd/yy hh:mm:ss a')
+  }
+
+  var paginate = function(data, page, nextFunction) {
+    el.append('<br />')
+    for (var i = page * lineHeight; i < (page * lineHeight) + lineHeight; i++) {
+      if (typeof data[i] === 'undefined')
+        break
+      el.append(data[i] + '<br />')
+    }
+    el.append('<span class="ansi-magenta-fg">[Pause]</span>')
+    pageTimer = setTimeout(function() { el.append('<span class="ansi-magenta-fg"> - <strong>[Press Space or Enter to continue]</strong></span>') }, 10000)
+    window.scrollTo(0, document.body.scrollHeight)
+    $(document).one('keyup.paginate', null, function(e) {
+      clearTimeout(pageTimer)
+      if (typeof data[i] === 'undefined')
+        return
+      paginate(data, page + 1)
+    })
+    if (typeof nextFunction !== 'undefined')
+      nextFunction()
+  }
+
+  var addCommas = function(str) {
+    str += ''
+    x = str.split('.')
+    x1 = x[0]
+    x2 = x.length > 1 ? '.' + x[1] : ''
+    var rgx = /(\d+)(\d{3})/
+    while (rgx.test(x1))
+      x1 = x1.replace(rgx, '$1' + ',' + '$2')
+    return x1 + x2
+  }
+
+  var getRandom = function(array) {
+    return array[Math.floor(Math.random() * array.length)]
+  }
+
+  return {
+    init: function() {
+      showUniverses()
+    },
+    show: function() {
+      getSectorData(displayCurrentSector)
+    }
+  }
+}()
+
+jQuery(document).ready(function() {
+  Tradewars.init()
+})
